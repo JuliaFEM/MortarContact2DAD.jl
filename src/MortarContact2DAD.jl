@@ -6,10 +6,17 @@
 """
 module MortarContact2DAD
 
+using ForwardDiff
+
 using Reexport
 @reexport using FEMBase
+import FEMBase: get_unknown_field_name, assemble_elements!, add_elements!
 
-export Contact2DAD
+const MortarElements2D = Union{Seg2,Seg3}
+
+include("mortar2dad.jl")
+include("contact2dad.jl")
+export Mortar2DAD, Contact2DAD
 export add_slave_elements!, add_master_elements!
 export get_slave_elements, get_master_elements
 export get_slave_dofs, get_master_dofs
