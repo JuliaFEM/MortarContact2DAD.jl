@@ -1,5 +1,5 @@
 # This file is a part of JuliaFEM.
-# License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE.md
+# License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
 type Mortar2DAD <: BoundaryProblem
     master_elements :: Vector{Element}
@@ -10,28 +10,28 @@ function Mortar2DAD()
     return Mortar2DAD([], false)
 end
 
-function add_elements!(::Problem{Mortar2DAD}, ::Any)
+function FEMBase.add_elements!(::Problem{Mortar2DAD}, ::Any)
     error("use `add_slave_elements!` and `add_master_elements!` to add ",
           "elements to the Mortar2D problem.")
 end
 
-function add_slave_elements!(problem::Problem{Mortar2DAD}, elements)
+function FEMBase.add_slave_elements!(problem::Problem{Mortar2DAD}, elements)
     for element in elements
         push!(problem.elements, element)
     end
 end
 
-function add_master_elements!(problem::Problem{Mortar2DAD}, elements)
+function FEMBase.add_master_elements!(problem::Problem{Mortar2DAD}, elements)
     for element in elements
         push!(problem.properties.master_elements, element)
     end
 end
 
-function get_slave_elements(problem::Problem{Mortar2DAD})
+function FEMBase.get_slave_elements(problem::Problem{Mortar2DAD})
     return problem.elements
 end
 
-function get_master_elements(problem::Problem{Mortar2DAD})
+function FEMBase.get_master_elements(problem::Problem{Mortar2DAD})
     return problem.properties.master_elements
 end
 
@@ -112,8 +112,8 @@ end
 Construct .. + fc*la and C(d,la)=0
 
 """
-function assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Assembly,
-                            elements::Vector{Element{Seg2}}, time::Float64)
+function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Assembly,
+                                    elements::Vector{Element{Seg2}}, time::Float64)
 
     props = problem.properties
     field_dim = get_unknown_field_dimension(problem)
@@ -178,7 +178,7 @@ function assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Assembly,
 
 
             # 3. loop all master elements
-            for master_element in slave_element("master elements", time)
+            for master_element in get_master_elements(problem)
 
                 nm = length(master_element)
                 master_element_nodes = get_connectivity(master_element)

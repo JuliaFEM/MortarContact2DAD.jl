@@ -13,28 +13,28 @@ function Contact2DAD()
     return Contact2DAD([], false, 0, :AUTO, false)
 end
 
-function add_elements!(::Problem{Contact2DAD}, ::Any)
+function FEMBase.add_elements!(::Problem{Contact2DAD}, ::Any)
     error("use `add_slave_elements!` and `add_master_elements!` to add ",
           "elements to the Mortar2D problem.")
 end
 
-function add_slave_elements!(problem::Problem{Contact2DAD}, elements)
+function FEMBase.add_slave_elements!(problem::Problem{Contact2DAD}, elements)
     for element in elements
         push!(problem.elements, element)
     end
 end
 
-function add_master_elements!(problem::Problem{Contact2DAD}, elements)
+function FEMBase.add_master_elements!(problem::Problem{Contact2DAD}, elements)
     for element in elements
         push!(problem.properties.master_elements, element)
     end
 end
 
-function get_slave_elements(problem::Problem{Contact2DAD})
+function FEMBase.get_slave_elements(problem::Problem{Contact2DAD})
     return problem.elements
 end
 
-function get_master_elements(problem::Problem{Contact2DAD})
+function FEMBase.get_master_elements(problem::Problem{Contact2DAD})
     return problem.properties.master_elements
 end
 
@@ -148,8 +148,8 @@ Frictionless 2d finite sliding contact with forwarddiff.
 
 true/false flags: finite_sliding, friction, use_forwarddiff
 """
-function assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
-                            elements::Vector{Element{Seg2}}, time::Float64)
+function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
+                                    elements::Vector{Element{Seg2}}, time::Float64)
 
     props = problem.properties
     props.iteration += 1
