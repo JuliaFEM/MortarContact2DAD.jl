@@ -4,3 +4,6 @@
 using MortarContact2DAD
 using Base.Test
 
+@testset "MortarContact2DAD.jl tests" begin
+    @testset "test_01.jl" begin include("test_01.jl") end
+end
