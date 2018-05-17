@@ -3,6 +3,7 @@
 
 using MortarContact2DAD
 using MortarContact2DAD: get_slave_dofs, get_master_dofs
+using MortarContact2DAD: project_from_master_to_slave_ad, project_from_slave_to_master_ad
 using FEMBase.Test
 
 X = Dict(
@@ -21,7 +22,7 @@ slave = Element(Seg2, [1, 2])
 master = Element(Seg2, [3, 4])
 update!([slave, master], "geometry", X)
 update!([slave, master], "displacement", u)
-update!(slave, "normal", [0.0, 1.0])
+update!(slave, "normal", ([0.0, 1.0], [0.0, 1.0]))
 problem = Problem(Mortar2DAD, "test problem", 2, "displacement")
 add_slave_elements!(problem, [slave])
 add_master_elements!(problem, [master])
@@ -43,7 +44,10 @@ C2 = full(problem.assembly.C2)
 @test get_master_dofs(problem) == [5, 6, 7, 8]
 x1 = slave("geometry", 0.0)
 n1 = slave("normal", 0.0)
-xm = 1/2*(X[3]+X[4])
-xs = 1/2*(X[1]+X[2])
-@test_throws Exception project_from_master_to_slave(slave, x1, n1, xm, 0.0; tol=0.0)
-@test_throws Exception project_from_slave_to_master(master, x1, n1, xs, 0.0; tol=0.0)
+xm = 1/3*(X[3]+X[4])
+xs = 1/3*(X[1]+X[2])
+@test_throws ErrorException project_from_master_to_slave_ad(slave, x1, n1, xm, 0.0; tol=0.0, max_iterations=1)
+x1 = [0.5, 0.0]
+n1 = [0.0, 1.0]
+x2 = master("geometry", 0.0)
+@test_throws ErrorException project_from_slave_to_master_ad(master, x1, n1, x2, 0.0; tol=0.0, max_iterations=1)
