@@ -2,7 +2,8 @@
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
 using MortarContact2DAD
-using Base.Test
+using MortarContact2DAD: get_slave_dofs, get_master_dofs
+using FEMBase.Test
 
 X = Dict(
     1 => [0.0, 0.0],
@@ -20,6 +21,7 @@ slave = Element(Seg2, [1, 2])
 master = Element(Seg2, [3, 4])
 update!([slave, master], "geometry", X)
 update!([slave, master], "displacement", u)
+update!(slave, "normal", [0.0, 1.0])
 problem = Problem(Mortar2DAD, "test problem", 2, "displacement")
 add_slave_elements!(problem, [slave])
 add_master_elements!(problem, [master])
@@ -35,3 +37,13 @@ C1 = full(problem.assembly.C1)
 C2 = full(problem.assembly.C2)
 @test isapprox(C1, C2)
 @test isapprox(C1, C1_expected)
+
+@test_throws Exception add_elements!(problem, [slave])
+@test get_slave_dofs(problem) == [1, 2, 3, 4]
+@test get_master_dofs(problem) == [5, 6, 7, 8]
+x1 = slave("geometry", 0.0)
+n1 = slave("normal", 0.0)
+xm = 1/2*(X[3]+X[4])
+xs = 1/2*(X[1]+X[2])
+@test_throws Exception project_from_master_to_slave(slave, x1, n1, xm, 0.0; tol=0.0)
+@test_throws Exception project_from_slave_to_master(master, x1, n1, xs, 0.0; tol=0.0)
