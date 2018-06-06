@@ -23,6 +23,7 @@ master = Element(Seg2, [3, 4])
 update!([slave, master], "geometry", X)
 update!([slave, master], "displacement", u)
 problem = Problem(Contact2DAD, "test problem", 2, "displacement")
+push!(problem.properties.always_in_contact, 1, 2)
 # problem.properties.rotate_normals = true
 add_slave_elements!(problem, [slave])
 add_master_elements!(problem, [master])

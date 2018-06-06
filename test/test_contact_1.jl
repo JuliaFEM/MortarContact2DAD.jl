@@ -46,7 +46,13 @@ C1_expected = [
  0.0  1.0  0.0  0.0   0.0  -1.0   0.0   0.0
  0.0  0.0  1.0  0.0   0.0   0.0  -1.0   0.0
  0.0  0.0  0.0  1.0   0.0   0.0   0.0  -1.0]
+C2_expected = [
+ 1.0  0.0  0.0  0.0  -1.0  0.0   0.0  0.0
+ 0.0  0.0  0.0  0.0   0.0  0.0   0.0  0.0
+ 0.0  0.0  1.0  0.0   0.0  0.0  -1.0  0.0
+ 0.0  0.0  0.0  0.0   0.0  0.0   0.0  0.0]
 @test isapprox(C1, C1_expected)
+@test isapprox(C2, C2_expected)
 @test isapprox(K, zeros(4, 8))
 @test isapprox(f, zeros(4))
 @test isapprox(g, zeros(4))
