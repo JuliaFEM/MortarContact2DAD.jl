@@ -23,7 +23,7 @@ master = Element(Seg2, [3, 4])
 update!([slave, master], "geometry", X)
 update!([slave, master], "displacement", u)
 problem = Problem(Contact2DAD, "test problem", 2, "displacement")
-# problem.properties.rotate_normals = true
+problem.properties.rotate_normals = false
 add_slave_elements!(problem, [slave])
 add_master_elements!(problem, [master])
 problem.assembly.u = zeros(8)
@@ -56,3 +56,21 @@ C2_expected = [
 @test isapprox(K, zeros(4, 8))
 @test isapprox(f, zeros(4))
 @test isapprox(g, zeros(4))
+
+empty!(problem.assembly)
+problem.properties.iteration = 0
+problem.properties.contact_state_in_first_iteration = :INACTIVE
+problem.properties.print_summary = true
+assemble!(problem, 0.0)
+C2 = full(problem.assembly.C2, 4, 8)
+@test !isapprox(C2, C2_expected)
+
+problem.assembly.u = zeros(0)
+problem.assembly.la = zeros(0)
+empty!(problem.assembly)
+@test_throws Exception assemble!(problem, 0.0)
+
+using MortarContact2DAD: get_slave_dofs, get_master_dofs
+@test get_slave_dofs(problem) == [1, 2, 3, 4]
+@test get_master_dofs(problem) == [5, 6, 7, 8]
+@test_throws Exception add_elements!(problem, [slave])

@@ -7,8 +7,8 @@ using FEMBase.Test
 # Matching mesh, undeformed, gap = 1.0 between surfaces
 
 X = Dict(
-    1 => [0.0, 2.0],
-    2 => [0.0, 0.0],
+    1 => [0.0, 0.0],
+    2 => [0.0, 2.0],
     3 => [1.0, 2.0],
     4 => [1.0, 0.0])
 
@@ -24,7 +24,7 @@ update!([slave, master], "geometry", X)
 update!([slave, master], "displacement", u)
 problem = Problem(Contact2DAD, "test problem", 2, "displacement")
 push!(problem.properties.always_in_contact, 1, 2)
-# problem.properties.rotate_normals = true
+problem.properties.rotate_normals = true
 add_slave_elements!(problem, [slave])
 add_master_elements!(problem, [master])
 problem.assembly.u = zeros(8)
@@ -43,14 +43,14 @@ f = full(problem.assembly.f, 4, 1)
 g = full(problem.assembly.g, 4, 1)
 
 C1_expected = [
- 1.0  0.0  0.0  0.0  -1.0   0.0   0.0   0.0
- 0.0  1.0  0.0  0.0   0.0  -1.0   0.0   0.0
- 0.0  0.0  1.0  0.0   0.0   0.0  -1.0   0.0
- 0.0  0.0  0.0  1.0   0.0   0.0   0.0  -1.0]
+ 1.0  0.0  0.0  0.0   0.0   0.0  -1.0   0.0
+ 0.0  1.0  0.0  0.0   0.0   0.0   0.0  -1.0
+ 0.0  0.0  1.0  0.0  -1.0   0.0   0.0   0.0
+ 0.0  0.0  0.0  1.0   0.0  -1.0   0.0   0.0]
 C2_expected = [
- 1.0  -0.5  0.0  0.5  -1.0  0.0   0.0  0.0
+ 1.0   0.5  0.0 -0.5   0.0  0.0  -1.0  0.0
  0.0   0.0  0.0  0.0   0.0  0.0   0.0  0.0
- 0.0  -0.5  1.0  0.5   0.0  0.0  -1.0  0.0
+ 0.0   0.5  1.0 -0.5  -1.0  0.0   0.0  0.0
  0.0   0.0  0.0  0.0   0.0  0.0   0.0  0.0]
 D_expected = [
  0.0   0.0  0.0   0.0  0.0  0.0  0.0  0.0

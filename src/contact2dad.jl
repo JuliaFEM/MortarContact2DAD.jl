@@ -13,11 +13,12 @@ type Contact2DAD <: BoundaryProblem
     beta :: Dict{Int64, Real}
     nadj_nodes :: Dict{Int64, Real}
     scaling_factors :: Dict{Int64, Real}
+    print_summary :: Bool
 end
 
 function Contact2DAD()
     return Contact2DAD([], false, true, 0, :AUTO, Set(),
-                        true, Dict(), Dict(), Dict(), Dict())
+                        true, Dict(), Dict(), Dict(), Dict(), false)
 end
 
 function FEMBase.add_elements!(::Problem{Contact2DAD}, ::Any)
@@ -395,7 +396,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             end
         end
 
-        if false
+        if problem.properties.print_summary
             info("Summary of nodes")
             for j in sort(collect(keys(is_active)))
                 n = map(ForwardDiff.value, normals[:,j])
