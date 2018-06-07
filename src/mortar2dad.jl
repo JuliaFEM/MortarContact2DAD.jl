@@ -3,11 +3,10 @@
 
 type Mortar2DAD <: BoundaryProblem
     master_elements :: Vector{Element}
-    rotate_normals :: Bool
 end
 
 function Mortar2DAD()
-    return Mortar2DAD([], false)
+    return Mortar2DAD([])
 end
 
 function FEMBase.add_elements!(::Problem{Mortar2DAD}, ::Any)
@@ -51,9 +50,8 @@ function get_master_dofs(problem::Problem{Mortar2DAD})
     return sort(unique(dofs))
 end
 
-function project_from_master_to_slave_ad{E<:MortarElements2D}(
-    slave_element::Element{E}, x1_, n1_, x2, time;
-    tol=1.0e-10, max_iterations=20)
+function project_from_master_to_slave_ad(slave_element::Element{E}, x1_, n1_, x2, time;
+                    tol=1.0e-9, max_iterations=5) where {E<:MortarElements2D}
 
     x1(xi1) = interpolate(vec(get_basis(slave_element, [xi1], time)), x1_)
     dx1(xi1) = interpolate(vec(get_dbasis(slave_element, [xi1], time)), x1_)
@@ -73,12 +71,12 @@ function project_from_master_to_slave_ad{E<:MortarElements2D}(
         end
     end
 
-    info("x1 = $(ForwardDiff.get_value(x1_.data))")
-    info("n1 = $(ForwardDiff.get_value(n1_.data))")
-    info("x2 = $(ForwardDiff.get_value(x2))")
-    info("xi1 = $(ForwardDiff.get_value(xi1)), dxi1 = $(ForwardDiff.get_value(dxi1))")
-    info("-R(xi1) = $(ForwardDiff.get_value(-R(xi1)))")
-    info("dR(xi1) = $(ForwardDiff.get_value(dR(xi1)))")
+    info("x1 = $x1")
+    info("n1 = $n1")
+    info("x2 = $x2")
+    info("xi1 = $xi1, dxi1 = $dxi1")
+    info("-R(xi1) = $(-R(xi1))")
+    info("dR(xi1) = $(dR(xi1))")
     error("find projection from master to slave: did not converge")
 
 end
@@ -119,9 +117,6 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
     field_dim = get_unknown_field_dimension(problem)
     field_name = get_parent_field_name(problem)
     slave_elements = get_slave_elements(problem)
-    if field_name != "displacement"
-        error("mortar forwarddiff assembly: only displacement field with adjust=yes supported")
-    end
 
     function calculate_interface(x::Vector)
 
@@ -154,12 +149,6 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
         for j in S
             tangents[:,j] /= norm(tangents[:,j])
             normals[:,j] = Q*tangents[:,j]
-        end
-
-        if props.rotate_normals
-            for j in S
-                normals[:,j] = -normals[:,j]
-            end
         end
 
         #update!(slave_elements, "normal", time => Dict(j => normals[:,j] for j in S))

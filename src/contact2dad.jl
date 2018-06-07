@@ -1,16 +1,26 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
+using ForwardDiff: value
+
 type Contact2DAD <: BoundaryProblem
     master_elements :: Vector{Element}
     rotate_normals :: Bool
+    dual_basis :: Bool
     iteration :: Int
     contact_state_in_first_iteration :: Symbol
-    always_in_contact :: Bool
+    always_in_contact :: Set{Int64}
+    use_scaling :: Bool
+    alpha :: Dict{Int64, Real}
+    beta :: Dict{Int64, Real}
+    nadj_nodes :: Dict{Int64, Real}
+    scaling_factors :: Dict{Int64, Real}
+    print_summary :: Bool
 end
 
 function Contact2DAD()
-    return Contact2DAD([], false, 0, :AUTO, false)
+    return Contact2DAD([], false, true, 0, :AUTO, Set(),
+                        true, Dict(), Dict(), Dict(), Dict(), false)
 end
 
 function FEMBase.add_elements!(::Problem{Contact2DAD}, ::Any)
@@ -99,22 +109,28 @@ function project_from_master_to_slave_ad{E<:MortarElements2D}(
             return xi1_next
         end
         if debug
-            info("xi1 = $xi1")
-            info("R(xi1) = $(R(xi1))")
-            info("dR(xi1) = $(dR(xi1))")
-            info("dxi1 = $dxi1")
-            info("norm = $(norm(xi1_next - xi1))")
-            info("xi1_next = $xi1_next")
+            info("Debug data for iteration $i")
+            info("xi1 = $(value(xi1))")
+            info("R(xi1) = $(value(R(xi1)))")
+            info("dR(xi1) = $(value(dR(xi1)))")
+            info("dxi1 = $(value(dxi1))")
+            info("norm = $(value(norm(xi1_next - xi1)))")
+            info("xi1_next = $(value(xi1_next))")
         end
         xi1 = xi1_next
     end
 
-    info("x1 = $x1_")
-    info("n1 = $n1_")
-    info("x2 = $x2")
-    info("xi1 = $xi1, dxi1 = $dxi1")
-    info("-R(xi1) = $(-R(xi1))")
-    info("dR(xi1) = $(dR(xi1))")
+    info("Projection algorithm failed with the following data:")
+    a, b = x1_.data
+    info("x11 = $(map(value, a))")
+    info("x12 = $(map(value, b))")
+    a, b = n1_.data
+    info("n11 = $(map(value, a))")
+    info("n12 = $(map(value, b))")
+    info("x2 = $(map(value, x2))")
+    info("xi1 = $(value(xi1)), dxi1 = $(value(dxi1))")
+    info("-R(xi1) = $(value(-R(xi1)))")
+    info("dR(xi1) = $(value(dR(xi1)))")
     error("find projection from master to slave: did not converge")
 
 end
@@ -142,6 +158,7 @@ function project_from_slave_to_master_ad{E<:MortarElements2D}(
     error("find projection from slave to master: did not converge, last val: $xi2 and $dxi2")
 
 end
+
 
 """
 Frictionless 2d finite sliding contact with forwarddiff.
@@ -209,6 +226,10 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         end
         update!(slave_elements, "normal", time => normals2)
 
+        alpha = empty!(problem.properties.alpha)
+        beta = empty!(problem.properties.beta)
+        nadj_nodes = empty!(problem.properties.nadj_nodes)
+
         # 2. loop all slave elements
         for slave_element in slave_elements
 
@@ -220,45 +241,69 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             n1 = ((normals[:,i] for i in slave_element_nodes)...)
             nnodes = size(slave_element, 2)
 
-            # construct dual basis
-            De = zeros(nnodes, nnodes)
-            Me = zeros(nnodes, nnodes)
+            Ae = eye(nnodes)
 
-            nsegments = 0
+            if problem.properties.dual_basis # construct dual basis
 
-            for master_element in get_master_elements(problem)
+                De = zeros(nnodes, nnodes)
+                Me = zeros(nnodes, nnodes)
+                ae = zeros(nnodes)
+                be = zeros(nnodes)
 
-                master_element_nodes = get_connectivity(master_element)
-                X2 = master_element("geometry", time)
-                u2 = ((u[:,i] for i in master_element_nodes)...)
-                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
-
-                # calculate segmentation: we care only about endpoints
-                xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
-                xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
-                xi1 = clamp.([xi1a; xi1b], -1.0, 1.0)
-                l = 1/2*abs(xi1[2]-xi1[1])
-                isapprox(l, 0.0) && continue # no contribution in this master element
-
-                nsegments += 1
                 for ip in get_integration_points(slave_element, 3)
-                    # jacobian of slave element in deformed state
                     dN = get_dbasis(slave_element, ip, time)
                     j = sum([kron(dN[:,i], x1[i]') for i=1:length(x1)])
-                    w = ip.weight*norm(j)*l
-                    xi = ip.coords[1]
-                    xi_s = dot([1/2*(1-xi); 1/2*(1+xi)], xi1)
-                    N1 = get_basis(slave_element, xi_s, time)
-                    De += w*diagm(vec(N1))
-                    Me += w*N1'*N1
+                    detj = norm(j)
+                    w = ip.weight*detj
+                    N1 = slave_element(ip, time)
+                    ae += w*vec(N1)/detj
                 end
-            end
 
-            if nsegments == 0
-                continue
-            end
+                nsegments = 0
 
-            Ae = De*inv(Me)
+                for master_element in get_master_elements(problem)
+
+                    master_element_nodes = get_connectivity(master_element)
+                    X2 = master_element("geometry", time)
+                    u2 = ((u[:,i] for i in master_element_nodes)...)
+                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
+
+                    # calculate segmentation: we care only about endpoints
+                    xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
+                    xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
+                    xi1 = clamp.([xi1a; xi1b], -1.0, 1.0)
+                    l = 1/2*abs(xi1[2]-xi1[1])
+                    isapprox(l, 0.0) && continue # no contribution in this master element
+
+                    nsegments += 1
+                    for ip in get_integration_points(slave_element, 3)
+                        # jacobian of slave element in deformed state
+                        dN = get_dbasis(slave_element, ip, time)
+                        j = sum([kron(dN[:,i], x1[i]') for i=1:length(x1)])
+                        detj = norm(j)
+                        w = ip.weight*norm(j)*l
+                        xi = ip.coords[1]
+                        xi_s = dot([1/2*(1-xi); 1/2*(1+xi)], xi1)
+                        N1 = get_basis(slave_element, xi_s, time)
+                        De += w*diagm(vec(N1))
+                        Me += w*N1'*N1
+                        be += w*vec(N1)/detj
+                    end
+                end
+
+                for (i, j) in enumerate(get_connectivity(slave_element))
+                    alpha[j] = get(alpha, j, 0.0) + ae[i]
+                    beta[j] = get(beta, j, 0.0) + be[i]
+                    nadj_nodes[j] = get(nadj_nodes, j, 0) + 1
+                end
+
+                if nsegments == 0
+                    continue
+                end
+
+                Ae = De*inv(Me)
+
+            end
 
             # 3. loop all master elements
             for master_element in get_master_elements(problem)
@@ -359,7 +404,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             end
         end
 
-        if false
+        if problem.properties.print_summary
             info("Summary of nodes")
             for j in sort(collect(keys(is_active)))
                 n = map(ForwardDiff.value, normals[:,j])
@@ -374,12 +419,28 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                 t = Q'*n
                 lan = dot(n, la[:,j])
                 lat = dot(t, la[:,j])
-                C[1,j] += gap[1, j]
+                C[1,j] -= gap[1, j]
                 C[2,j] += lat
             else
                 C[:,j] = la[:,j]
             end
 
+        end
+
+        # Apply scaling to contact virtual work and contact constraints
+        if problem.properties.use_scaling
+            scaling = empty!(problem.properties.scaling_factors)
+            for j in S
+                isapprox(beta[j], 0.0) && continue
+                #is_active[j] || continue
+                #haskey(alpha, j) || continue
+                #haskey(beta, j) || continue
+                #haskey(nadj_nodes, j) || continue
+                scaling[j] = alpha[j] / (nadj_nodes[j] * beta[j])
+                C[1,j] *= scaling[j]
+                fc[:,j] *= scaling[j]
+            end
+            update!(slave_elements, "contact scaling", time => scaling)
         end
 
         return vec([fc C])
@@ -395,7 +456,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     A = ForwardDiff.jacobian(calculate_interface, x)
     b = calculate_interface(x)
     A = sparse(A)
-    b = sparse(b)
+    b = -sparse(b)
     SparseArrays.droptol!(A, 1.0e-9)
     SparseArrays.droptol!(b, 1.0e-9)
 
@@ -404,8 +465,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     C1 = A[1:ndofs,ndofs+1:end]
     C2 = A[ndofs+1:end,1:ndofs]
     D = A[ndofs+1:end,ndofs+1:end]
-    f = -b[1:ndofs]
-    g = -b[ndofs+1:end]
+    f = b[1:ndofs]
+    g = b[ndofs+1:end]
 
     f += C1*problem.assembly.la
     g += D*problem.assembly.la
