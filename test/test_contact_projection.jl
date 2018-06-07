@@ -6,7 +6,7 @@ using MortarContact2DAD: project_from_master_to_slave_ad
 using ForwardDiff
 using FEMBase.Test
 
-function f(u)
+function func1(u)
     x1 = [0.0, 0.0] + u[1:2]
     x2 = [0.0, 2.0] + u[3:4]
     x3 = [0.5, 0.5] + u[5:6]
@@ -19,10 +19,10 @@ function f(u)
     return [xi1]
 end
 
-J = ForwardDiff.jacobian(f, zeros(6))
+J = ForwardDiff.jacobian(func1, zeros(6))
 @test isapprox(J, [-0.25 -0.75 0.25 -0.25 0.0 1.0])
 
-function g(u)
+function func2(u)
     x1 = [0.0, 0.0] + u[1:2]
     x2 = [0.0, 2.0] + u[3:4]
     x3 = [0.5, 0.5] + u[5:6]
@@ -35,4 +35,4 @@ function g(u)
     return [xi1]
 end
 
-@test_throws Exception ForwardDiff.jacobian(g, zeros(6))
+@test_throws Exception ForwardDiff.jacobian(func2, zeros(6))
