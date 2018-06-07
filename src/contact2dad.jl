@@ -1,6 +1,8 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
+using ForwardDiff: value
+
 type Contact2DAD <: BoundaryProblem
     master_elements :: Vector{Element}
     rotate_normals :: Bool
@@ -107,22 +109,28 @@ function project_from_master_to_slave_ad{E<:MortarElements2D}(
             return xi1_next
         end
         if debug
-            info("xi1 = $xi1")
-            info("R(xi1) = $(R(xi1))")
-            info("dR(xi1) = $(dR(xi1))")
-            info("dxi1 = $dxi1")
-            info("norm = $(norm(xi1_next - xi1))")
-            info("xi1_next = $xi1_next")
+            info("Debug data for iteration $i")
+            info("xi1 = $(value(xi1))")
+            info("R(xi1) = $(value(R(xi1)))")
+            info("dR(xi1) = $(value(dR(xi1)))")
+            info("dxi1 = $(value(dxi1))")
+            info("norm = $(value(norm(xi1_next - xi1)))")
+            info("xi1_next = $(value(xi1_next))")
         end
         xi1 = xi1_next
     end
 
-    info("x1 = $x1_")
-    info("n1 = $n1_")
-    info("x2 = $x2")
-    info("xi1 = $xi1, dxi1 = $dxi1")
-    info("-R(xi1) = $(-R(xi1))")
-    info("dR(xi1) = $(dR(xi1))")
+    info("Projection algorithm failed with the following data:")
+    a, b = x1_.data
+    info("x11 = $(map(value, a))")
+    info("x12 = $(map(value, b))")
+    a, b = n1_.data
+    info("n11 = $(map(value, a))")
+    info("n12 = $(map(value, b))")
+    info("x2 = $(map(value, x2))")
+    info("xi1 = $(value(xi1)), dxi1 = $(value(dxi1))")
+    info("-R(xi1) = $(value(-R(xi1)))")
+    info("dR(xi1) = $(value(dR(xi1)))")
     error("find projection from master to slave: did not converge")
 
 end
