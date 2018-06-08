@@ -56,6 +56,16 @@ function get_slave_dofs(problem::Problem{Contact2DAD})
     return sort(unique(dofs))
 end
 
+function get_slave_nodes(problem::Problem{Contact2DAD})
+    nodes = Set{Int64}()
+    for element in get_slave_elements(problem)
+        for j in get_connectivity(element)
+            push!(nodes, j)
+        end
+    end
+    return nodes
+end
+
 function get_master_dofs(problem::Problem{Contact2DAD})
     dofs = Int64[]
     for element in get_master_elements(problem)
@@ -171,60 +181,50 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     props = problem.properties
     props.iteration += 1
 
-    field_dim = get_unknown_field_dimension(problem)
-    field_name = get_parent_field_name(problem)
     slave_elements = get_slave_elements(problem)
+    X = problem("geometry", time)
+    S = get_slave_nodes(problem)
 
-    function calculate_interface(x::Vector)
+    function calculate_interface(x::Vector{T}) where {T}
 
-        ndofs = round(Int, length(x)/2)
-        nnodes = round(Int, ndofs/field_dim)
-        u = reshape(x[1:ndofs], field_dim, nnodes)
-        la = reshape(x[ndofs+1:end], field_dim, nnodes)
-        fc = zero(u)
-        gap = zero(u)
-        C = zero(la)
-        S = Set{Int64}()
+        dim = 2
+        ndofs = Int(length(x)/2)
+        nnodes = Int(ndofs/dim)
+        u = Dict(j => [x[dim*(j-1)+i] for i=1:dim] for j=1:nnodes)
+        la = Dict(j => [x[dim*(j-1)+i+ndofs] for i=1:dim] for j=1:nnodes)
+        x = Dict(j => X[j]+u[j] for j in S)
+
+        fc = zeros(T, 2, nnodes)
+        gap = zeros(T, 2, nnodes)
+        C = zeros(T, 2, nnodes)
 
         # 1. update nodal normals for slave elements
-        Q = [0.0 -1.0; 1.0 0.0]
-        normals = zero(u)
-        for element in slave_elements
-            conn = get_connectivity(element)
-            push!(S, conn...)
-            gdofs = get_gdofs(problem, element)
-            X_el = element("geometry", time)
-            x_el = tuple( (X_el[i] + u[:,j] for (i,j) in enumerate(conn))... )
-            #=
-            for ip in get_integration_points(element, 3)
-                dN = get_dbasis(element, ip, time)
-                N = element(ip, time)
-                t = sum([kron(dN[:,i], x_el[i]') for i=1:length(x_el)])
-                normals[:, conn] += ip.weight*Q*t'*N
-            end
-            =#
-            dN = get_dbasis(element, [0.0], time)
-            t = sum([kron(dN[:,i], x_el[i]') for i=1:length(x_el)])
-            n = Q*t'
-            n /= norm(n)
-            for c in conn
-                normals[:,c] += n
+        normals = similar(u)
+        tangents = similar(u)
+        nadj_nodes = Dict{Int64, Int64}()
+        coeff = props.rotate_normals ? -1.0 : 1.0
+        for slave_element in slave_elements
+            c1, c2 = get_connectivity(slave_element)
+            x1, x2 = x[c1], x[c2]
+            tangent = (x2-x1) / norm(x2-x1)
+            normal = [-tangent[2], tangent[1]]
+            for c in (c1, c2)
+                if !haskey(nadj_nodes, c)
+                    normals[c] = zeros(2)
+                    tangents[c] = zeros(2)
+                    nadj_nodes[c] = 0
+                end
+                normals[c] += coeff*normal
+                tangents[c] += coeff*tangent
+                nadj_nodes[c] += 1
             end
         end
-        for i in 1:size(normals,2)
-            normals[:,i] /= norm(normals[:,i])
+        for j in keys(normals)
+            normals[j] /= nadj_nodes[j]
+            tangents[j] /= nadj_nodes[j]
         end
-        # swap element normals in 2d if they point to inside of body
-        if props.rotate_normals
-            for i=1:size(normals,2)
-                normals[:,i] = -normals[:,i]
-            end
-        end
-        normals2 = Dict()
-        for j in S
-            normals2[j] = normals[:,j]
-        end
-        update!(slave_elements, "normal", time => normals2)
+        update!(slave_elements, "normal", time => normals)
+        update!(slave_elements, "tangent", time => tangents)
 
         alpha = empty!(problem.properties.alpha)
         beta = empty!(problem.properties.beta)
@@ -234,11 +234,13 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         for slave_element in slave_elements
 
             slave_element_nodes = get_connectivity(slave_element)
-            X1 = slave_element("geometry", time)
-            u1 = ((u[:,i] for i in slave_element_nodes)...,)
-            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
-            la1 = ((la[:,i] for i in slave_element_nodes)...,)
-            n1 = ((normals[:,i] for i in slave_element_nodes)...,)
+            c1, c2 = get_connectivity(slave_element)
+            X1 = (X[c1], X[c2])
+            u1 = ((u[i] for i in slave_element_nodes)...)
+            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...)
+            la1 = ((la[i] for i in slave_element_nodes)...)
+            n1 = ((normals[i] for i in slave_element_nodes)...)
+            t1 = ((tangents[i] for i in slave_element_nodes)...)
             nnodes = size(slave_element, 2)
 
             Ae = Matrix(1.0I, nnodes, nnodes)
@@ -264,9 +266,10 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                 for master_element in get_master_elements(problem)
 
                     master_element_nodes = get_connectivity(master_element)
+                    cm1, cm2 = get_connectivity(master_element)
                     X2 = master_element("geometry", time)
-                    u2 = ((u[:,i] for i in master_element_nodes)...,)
-                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+                    u2 = ((u[i] for i in master_element_nodes)...)
+                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
 
                     # calculate segmentation: we care only about endpoints
                     xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
@@ -310,8 +313,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                 master_element_nodes = get_connectivity(master_element)
                 X2 = master_element("geometry", time)
-                u2 = ((u[:,i] for i in master_element_nodes)...,)
-                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+                u2 = ((u[i] for i in master_element_nodes)...)
+                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
 
                 #x1_midpoint = 1/2*(x1[1]+x1[2])
                 #x2_midpoint = 1/2*(x2[1]+x2[2])
@@ -341,7 +344,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                     N1 = vec(get_basis(slave_element, xi_s, time))
                     x_s = interpolate(N1, x1) # coordinate in gauss point
                     n_s = interpolate(N1, n1) # normal direction in gauss point
-                    t_s = Q'*n_s # tangent direction in gauss point
+                    t_s = interpolate(N1, t1) # tangent direction in gauss point
                     xi_m = project_from_slave_to_master_ad(master_element, x_s, n_s, x2)
                     N2 = vec(get_basis(master_element, xi_m, time))
                     x_m = interpolate(N2, x2)
@@ -370,7 +373,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             if state == :AUTO
                 avg_gap = ForwardDiff.value(mean([gap[1, j] for j in S]))
                 std_gap = ForwardDiff.value(std([gap[1, j] for j in S]))
-                if (avg_gap < 1.0e-12) && (std_gap < 1.0e-12)
+                if (avg_gap < 1.0e-3) && (std_gap < 1.0e-6)
                     state = :ACTIVE
                 else
                     state = :UNKNOWN
@@ -387,7 +390,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                 is_active[j] = true
                 continue
             end
-            lan = dot(normals[:,j], la[:,j])
+            lan = dot(normals[j], la[j])
             condition[j] = ForwardDiff.value(lan - gap[1, j])
             is_active[j] = condition[j] > 0
         end
@@ -407,22 +410,20 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         if problem.properties.print_summary
             @info("Summary of nodes")
             for j in sort(collect(keys(is_active)))
-                n = map(ForwardDiff.value, normals[:,j])
-                @info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
+                n = map(ForwardDiff.value, normals[j])
+                info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
             end
         end
 
         for j in S
 
             if is_active[j]
-                n = normals[:,j]
-                t = Q'*n
-                lan = dot(n, la[:,j])
-                lat = dot(t, la[:,j])
+                lan = dot(normals[j], la[j])
+                lat = dot(tangents[j], la[j])
                 C[1,j] -= gap[1, j]
                 C[2,j] += lat
             else
-                C[:,j] = la[:,j]
+                C[:,j] = la[j]
             end
 
         end
@@ -432,10 +433,6 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             scaling = empty!(problem.properties.scaling_factors)
             for j in S
                 isapprox(beta[j], 0.0) && continue
-                #is_active[j] || continue
-                #haskey(alpha, j) || continue
-                #haskey(beta, j) || continue
-                #haskey(nadj_nodes, j) || continue
                 scaling[j] = alpha[j] / (nadj_nodes[j] * beta[j])
                 C[1,j] *= scaling[j]
                 fc[:,j] *= scaling[j]

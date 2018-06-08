@@ -4,9 +4,9 @@
 using MortarContact2DAD, Test
 import FEMBase.Test: @test_resource
 
-X = Dict(1 => [-2.0, 0.0], 2 => [ 0.0, 0.0], 3 => [ 2.0, 0.0],
-         4 => [-2.0, 0.0], 5 => [ 0.0, 0.0], 6 => [-2.0, -2.0],
-         7 => [0.0, -2.0], 8 => [2.0, -2.0], 9 => [-2.0, 2.0],
+X = Dict(1 => [-2.0,  0.0], 2 => [ 0.0,  0.0], 3 => [ 2.0,  0.0],
+         4 => [-2.0,  0.0], 5 => [ 0.0,  0.0], 6 => [-2.0, -2.0],
+         7 => [ 0.0, -2.0], 8 => [ 2.0, -2.0], 9 => [-2.0,  2.0],
          10 => [0.0, 2.0])
 
  D = [0.5, 0.0]
@@ -43,6 +43,8 @@ end
 
 ndofs = 20
 contact.properties.iteration = 1
+data = i1
+time = 0.0
 for (data, time) in zip([i1, i2, i3], [0.0, 1.0, 2.0])
     println("Testing data for iteration / time $time ")
     empty!(contact.assembly)
