@@ -3,7 +3,7 @@
 
 using ForwardDiff: value
 
-type Contact2DAD <: BoundaryProblem
+mutable struct Contact2DAD <: BoundaryProblem
     master_elements :: Vector{Element}
     rotate_normals :: Bool
     dual_basis :: Bool
@@ -80,9 +80,9 @@ xi
     projected master
 
 """
-function project_from_master_to_slave_ad{E<:MortarElements2D}(
+function project_from_master_to_slave_ad(
     slave_element::Element{E}, x1_::DVTI, n1_::DVTI, x2::Vector;
-    tol=1.0e-10, max_iterations=20, debug=false)
+    tol=1.0e-10, max_iterations=20, debug=false) where E<:MortarElements2D
 
     """ Multiply basis / dbasis at `xi` with field. """
     function mul(func, xi, field)
@@ -135,9 +135,9 @@ function project_from_master_to_slave_ad{E<:MortarElements2D}(
 
 end
 
-function project_from_slave_to_master_ad{E<:MortarElements2D}(
+function project_from_slave_to_master_ad(
     master_element::Element{E}, x1, n1, x2_;
-    tol=1.0e-10, max_iterations=20)
+    tol=1.0e-10, max_iterations=20) where E<:MortarElements2D
 
     x2(xi2) = interpolate(vec(get_basis(master_element, [xi2], time)), x2_)
     dx2(xi2) = interpolate(vec(get_dbasis(master_element, [xi2], time)), x2_)
