@@ -5,7 +5,7 @@ using Documenter
 
 deploydocs(
     repo = "github.com/JuliaFEM/MortarContact2DAD.jl.git",
-    julia = "0.6",
+    julia = "0.7",
     target = "build",
     deps = nothing,
     make = nothing)

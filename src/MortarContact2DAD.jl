@@ -6,10 +6,7 @@
 """
 module MortarContact2DAD
 
-using ForwardDiff
-
-using Reexport
-@reexport using FEMBase
+using FEMBase, ForwardDiff, LinearAlgebra, SparseArrays, Statistics
 
 const MortarElements2D = Union{Seg2,Seg3}
 

@@ -1,8 +1,7 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-using MortarContact2DAD
-using FEMBase.Test
+using MortarContact2DAD, Test
 import FEMBase.Test: @test_resource
 
 X = Dict(1 => [-2.0, 0.0], 2 => [ 0.0, 0.0], 3 => [ 2.0, 0.0],
@@ -27,10 +26,16 @@ add_master_elements!(contact, contact_master_elements)
 all_elements = [element7, element8, element9]
 update!(all_elements, "geometry", X)
 
-using JLD
-i1 = load(@test_resource("iter_1.jld"))
-i2 = load(@test_resource("iter_2.jld"))
-i3 = load(@test_resource("iter_3.jld"))
+function load1(filename)
+    prefix = first(splitext(filename))
+    objs = ("K", "C1", "C2", "D", "f", "g", "u", "la")
+    data = Dict(obj => readdlm("$(prefix)_$(obj).dat") for obj in objs)
+    return data
+end
+
+i1 = load1(@test_resource("iter_1.jld"))
+i2 = load1(@test_resource("iter_2.jld"))
+i3 = load1(@test_resource("iter_3.jld"))
 
 function to_dict(u, ndofs, nnodes)
     return Dict(j => [u[ndofs*(j-1)+i] for i=1:ndofs] for j=1:nnodes)
@@ -41,21 +46,15 @@ contact.properties.iteration = 1
 for (data, time) in zip([i1, i2, i3], [0.0, 1.0, 2.0])
     println("Testing data for iteration / time $time ")
     empty!(contact.assembly)
-    contact.assembly.u = data["u"]
-    contact.assembly.la = data["la"]
+    contact.assembly.u = vec(data["u"])
+    contact.assembly.la = vec(data["la"])
     update!(contact, "displacement", time => to_dict(data["u"], 2, 5))
     update!(contact, "lambda", time => to_dict(data["la"], 2, 5))
     assemble!(contact, time)
-    K = full(contact.assembly.K, ndofs, ndofs)
-    C1 = full(contact.assembly.C1, ndofs, ndofs)
-    C2 = full(contact.assembly.C2, ndofs, ndofs)
-    D = full(contact.assembly.D, ndofs, ndofs)
-    f = full(contact.assembly.f, ndofs, 1)
-    g = full(contact.assembly.g, ndofs, 1)
-    @test isapprox(K, data["K"])
-    @test isapprox(C1, data["C1"])
-    @test isapprox(C2, data["C2"])
-    @test isapprox(D, data["D"])
-    @test isapprox(f, data["f"])
-    @test isapprox(g, data["g"])
+    @test isapprox(Matrix(sparse(contact.assembly.K, ndofs, ndofs)), data["K"])
+    @test isapprox(Matrix(sparse(contact.assembly.C1, ndofs, ndofs)), data["C1"])
+    @test isapprox(Matrix(sparse(contact.assembly.C2, ndofs, ndofs)), data["C2"])
+    @test isapprox(Matrix(sparse(contact.assembly.D, ndofs, ndofs)), data["D"])
+    @test isapprox(Vector(sparse(contact.assembly.f, ndofs, 1)[:]), data["f"]; atol=1.0e-9)
+    @test isapprox(Vector(sparse(contact.assembly.g, ndofs, 1)[:]), data["g"])
 end

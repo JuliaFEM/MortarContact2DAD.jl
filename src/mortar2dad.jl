@@ -124,18 +124,18 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
         nnodes = round(Int, ndofs/field_dim)
         u = reshape(x[1:ndofs], field_dim, nnodes)
         la = reshape(x[ndofs+1:end], field_dim, nnodes)
-        fc = zeros(u)
-        gap = zeros(u)
-        C = zeros(la)
+        fc = zero(u)
+        gap = zero(u)
+        C = zero(la)
 
         S = Set{Int64}()
         # 1. update nodal normals for slave elements
-        tangents = zeros(u)
+        tangents = zero(u)
         for element in slave_elements
             conn = get_connectivity(element)
             push!(S, conn...)
             X1 = element("geometry", time)
-            u1 = ((u[:,i] for i in conn)...)
+            u1 = ((u[:,i] for i in conn)...,)
             x1 = map(+, X1, u1)
             dN = get_dbasis(element, [0.0], time)
             tangent = sum([kron(dN[:,i], x1[i]') for i=1:length(x1)])
@@ -145,7 +145,7 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
         end
 
         Q = [0.0 -1.0; 1.0 0.0]
-        normals = zeros(u)
+        normals = zero(u)
         for j in S
             tangents[:,j] /= norm(tangents[:,j])
             normals[:,j] = Q*tangents[:,j]
@@ -160,10 +160,10 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
             nsl = length(slave_element)
             slave_element_nodes = get_connectivity(slave_element)
             X1 = slave_element("geometry", time)
-            u1 = ((u[:,i] for i in slave_element_nodes)...)
+            u1 = ((u[:,i] for i in slave_element_nodes)...,)
             x1 = map(+, X1, u1)
-            la1 = ((la[:,i] for i in slave_element_nodes)...)
-            n1 = ((normals[:,i] for i in slave_element_nodes)...)
+            la1 = ((la[:,i] for i in slave_element_nodes)...,)
+            n1 = ((normals[:,i] for i in slave_element_nodes)...,)
 
 
             # 3. loop all master elements
@@ -172,7 +172,7 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
                 nm = length(master_element)
                 master_element_nodes = get_connectivity(master_element)
                 X2 = master_element("geometry", time)
-                u2 = ((u[:,i] for i in master_element_nodes)...)
+                u2 = ((u[:,i] for i in master_element_nodes)...,)
                 x2 = map(+, X2, u2)
 
                 # 3.1 calculate segmentation
@@ -248,7 +248,7 @@ function FEMBase.assemble_elements!(problem::Problem{Mortar2DAD}, assembly::Asse
     SparseArrays.droptol!(b, 1.0e-12)
 
     K = A[1:ndofs,1:ndofs]
-    C1 = transpose(A[1:ndofs,ndofs+1:end])
+    C1 = copy(transpose(A[1:ndofs,ndofs+1:end]))
     C2 = A[ndofs+1:end,1:ndofs]
     D = A[ndofs+1:end,ndofs+1:end]
     f = b[1:ndofs]

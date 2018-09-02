@@ -1,10 +1,9 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-using MortarContact2DAD
+using MortarContact2DAD, Test
 using MortarContact2DAD: get_slave_dofs, get_master_dofs
 using MortarContact2DAD: project_from_master_to_slave_ad, project_from_slave_to_master_ad
-using FEMBase.Test
 
 X = Dict(
     1 => [0.0, 0.0],
@@ -34,8 +33,8 @@ C1_expected = 1/6*[
                0.0 2.0 0.0 1.0 0.0 -2.0 0.0 -1.0
                1.0 0.0 2.0 0.0 -1.0 0.0 -2.0 0.0
                0.0 1.0 0.0 2.0 0.0 -1.0 0.0 -2.0]
-C1 = full(problem.assembly.C1)
-C2 = full(problem.assembly.C2)
+C1 = problem.assembly.C1
+C2 = problem.assembly.C2
 @test isapprox(C1, C2)
 @test isapprox(C1, C1_expected)
 

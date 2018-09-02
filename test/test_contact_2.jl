@@ -1,8 +1,7 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-using MortarContact2DAD
-using FEMBase.Test
+using MortarContact2DAD, Test
 
 # Matching mesh, undeformed, gap = 1.0 between surfaces
 
@@ -35,12 +34,12 @@ n = slave("normal", 0.0)
 @test isapprox(n[1], n[2])
 @test isapprox(n[1], [1.0, 0.0])
 
-C1 = full(problem.assembly.C1, 4, 8)
-C2 = full(problem.assembly.C2, 4, 8)
-K = full(problem.assembly.K, 4, 8)
-D = full(problem.assembly.D, 4, 8)
-f = full(problem.assembly.f, 4, 1)
-g = full(problem.assembly.g, 4, 1)
+C1 = Matrix(sparse(problem.assembly.C1, 4, 8))
+C2 = Matrix(sparse(problem.assembly.C2, 4, 8))
+K = Matrix(sparse(problem.assembly.K, 4, 8))
+D = Matrix(sparse(problem.assembly.D, 4, 8))
+f = Vector(sparse(problem.assembly.f, 4, 1)[:])
+g = Vector(sparse(problem.assembly.g, 4, 1)[:])
 
 C1_expected = [
  1.0  0.0  0.0  0.0   0.0   0.0  -1.0   0.0

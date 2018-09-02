@@ -1,11 +1,10 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-using MortarContact2DAD
+using MortarContact2DAD, Test
 using MortarContact2DAD: project_from_master_to_slave_ad,
                          project_from_slave_to_master_ad
 using ForwardDiff
-using FEMBase.Test
 
 function get_func_1(max_iterations)
     function func_1(u)

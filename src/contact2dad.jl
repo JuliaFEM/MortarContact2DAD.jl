@@ -109,28 +109,28 @@ function project_from_master_to_slave_ad(
             return xi1_next
         end
         if debug
-            info("Debug data for iteration $i")
-            info("xi1 = $(value(xi1))")
-            info("R(xi1) = $(value(R(xi1)))")
-            info("dR(xi1) = $(value(dR(xi1)))")
-            info("dxi1 = $(value(dxi1))")
-            info("norm = $(value(norm(xi1_next - xi1)))")
-            info("xi1_next = $(value(xi1_next))")
+            @info("Debug data for iteration $i")
+            @info("xi1 = $(value(xi1))")
+            @info("R(xi1) = $(value(R(xi1)))")
+            @info("dR(xi1) = $(value(dR(xi1)))")
+            @info("dxi1 = $(value(dxi1))")
+            @info("norm = $(value(norm(xi1_next - xi1)))")
+            @info("xi1_next = $(value(xi1_next))")
         end
         xi1 = xi1_next
     end
 
-    info("Projection algorithm failed with the following data:")
+    @info("Projection algorithm failed with the following data:")
     a, b = x1_.data
-    info("x11 = $(map(value, a))")
-    info("x12 = $(map(value, b))")
+    @info("x11 = $(map(value, a))")
+    @info("x12 = $(map(value, b))")
     a, b = n1_.data
-    info("n11 = $(map(value, a))")
-    info("n12 = $(map(value, b))")
-    info("x2 = $(map(value, x2))")
-    info("xi1 = $(value(xi1)), dxi1 = $(value(dxi1))")
-    info("-R(xi1) = $(value(-R(xi1)))")
-    info("dR(xi1) = $(value(dR(xi1)))")
+    @info("n11 = $(map(value, a))")
+    @info("n12 = $(map(value, b))")
+    @info("x2 = $(map(value, x2))")
+    @info("xi1 = $(value(xi1)), dxi1 = $(value(dxi1))")
+    @info("-R(xi1) = $(value(-R(xi1)))")
+    @info("dR(xi1) = $(value(dR(xi1)))")
     error("find projection from master to slave: did not converge")
 
 end
@@ -181,14 +181,14 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         nnodes = round(Int, ndofs/field_dim)
         u = reshape(x[1:ndofs], field_dim, nnodes)
         la = reshape(x[ndofs+1:end], field_dim, nnodes)
-        fc = zeros(u)
-        gap = zeros(u)
-        C = zeros(la)
+        fc = zero(u)
+        gap = zero(u)
+        C = zero(la)
         S = Set{Int64}()
 
         # 1. update nodal normals for slave elements
         Q = [0.0 -1.0; 1.0 0.0]
-        normals = zeros(u)
+        normals = zero(u)
         for element in slave_elements
             conn = get_connectivity(element)
             push!(S, conn...)
@@ -235,13 +235,13 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
             slave_element_nodes = get_connectivity(slave_element)
             X1 = slave_element("geometry", time)
-            u1 = ((u[:,i] for i in slave_element_nodes)...)
-            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...)
-            la1 = ((la[:,i] for i in slave_element_nodes)...)
-            n1 = ((normals[:,i] for i in slave_element_nodes)...)
+            u1 = ((u[:,i] for i in slave_element_nodes)...,)
+            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
+            la1 = ((la[:,i] for i in slave_element_nodes)...,)
+            n1 = ((normals[:,i] for i in slave_element_nodes)...,)
             nnodes = size(slave_element, 2)
 
-            Ae = eye(nnodes)
+            Ae = Matrix(1.0I, nnodes, nnodes)
 
             if problem.properties.dual_basis # construct dual basis
 
@@ -265,8 +265,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                     master_element_nodes = get_connectivity(master_element)
                     X2 = master_element("geometry", time)
-                    u2 = ((u[:,i] for i in master_element_nodes)...)
-                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
+                    u2 = ((u[:,i] for i in master_element_nodes)...,)
+                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
                     # calculate segmentation: we care only about endpoints
                     xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
@@ -285,7 +285,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                         xi = ip.coords[1]
                         xi_s = dot([1/2*(1-xi); 1/2*(1+xi)], xi1)
                         N1 = get_basis(slave_element, xi_s, time)
-                        De += w*diagm(vec(N1))
+                        De += w*Matrix(Diagonal(vec(N1)))
                         Me += w*N1'*N1
                         be += w*vec(N1)/detj
                     end
@@ -310,8 +310,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                 master_element_nodes = get_connectivity(master_element)
                 X2 = master_element("geometry", time)
-                u2 = ((u[:,i] for i in master_element_nodes)...)
-                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
+                u2 = ((u[:,i] for i in master_element_nodes)...,)
+                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
                 #x1_midpoint = 1/2*(x1[1]+x1[2])
                 #x2_midpoint = 1/2*(x2[1]+x2[2])
@@ -366,7 +366,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
         state = problem.properties.contact_state_in_first_iteration
         if problem.properties.iteration == 1
-            info("First contact iteration, initial contact state = $state")
+            @info("First contact iteration, initial contact state = $state")
             if state == :AUTO
                 avg_gap = ForwardDiff.value(mean([gap[1, j] for j in S]))
                 std_gap = ForwardDiff.value(std([gap[1, j] for j in S]))
@@ -375,7 +375,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                 else
                     state = :UNKNOWN
                 end
-                info("Average weighted gap = $avg_gap, std gap = $std_gap, automatically determined contact state = $state")
+                @info("Average weighted gap = $avg_gap, std gap = $std_gap, automatically determined contact state = $state")
             end
         end
 
@@ -405,10 +405,10 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         end
 
         if problem.properties.print_summary
-            info("Summary of nodes")
+            @info("Summary of nodes")
             for j in sort(collect(keys(is_active)))
                 n = map(ForwardDiff.value, normals[:,j])
-                info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
+                @info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
             end
         end
 
@@ -491,7 +491,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     =#
 
     problem.assembly.K = K
-    problem.assembly.C1 = transpose(C1)
+    problem.assembly.C1 = copy(transpose(C1))
     problem.assembly.C2 = C2
     problem.assembly.D = D
     problem.assembly.f = sparse(f)
