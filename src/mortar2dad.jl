@@ -71,12 +71,8 @@ function project_from_master_to_slave_ad(slave_element::Element{E}, x1_, n1_, x2
         end
     end
 
-    info("x1 = $x1")
-    info("n1 = $n1")
-    info("x2 = $x2")
-    info("xi1 = $xi1, dxi1 = $dxi1")
-    info("-R(xi1) = $(-R(xi1))")
-    info("dR(xi1) = $(dR(xi1))")
+    @error("Projection from master to slave failed with the following data:",
+          x1, n1, x2, xi1, dxi1, -R(xi1), dR(xi1))
     error("find projection from master to slave: did not converge")
 
 end
