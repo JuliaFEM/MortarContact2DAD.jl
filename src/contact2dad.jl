@@ -170,11 +170,6 @@ function project_from_slave_to_master_ad(
 end
 
 
-"""
-Frictionless 2d finite sliding contact with forwarddiff.
-
-true/false flags: finite_sliding, friction, use_forwarddiff
-"""
 function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
                                     elements::Vector{Element{Seg2}}, time::Float64)
 
@@ -199,30 +194,69 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         C = zeros(T, 2, nnodes)
 
         # 1. update nodal normals for slave elements
-        normals = similar(u)
-        tangents = similar(u)
-        nadj_nodes = Dict{Int64, Int64}()
-        coeff = props.rotate_normals ? -1.0 : 1.0
-        for slave_element in slave_elements
-            c1, c2 = get_connectivity(slave_element)
-            x1, x2 = x[c1], x[c2]
-            tangent = (x2-x1) / norm(x2-x1)
-            normal = [-tangent[2], tangent[1]]
-            for c in (c1, c2)
-                if !haskey(nadj_nodes, c)
-                    normals[c] = zeros(2)
-                    tangents[c] = zeros(2)
-                    nadj_nodes[c] = 0
+        normals = Dict{Int64, Vector{T}}()
+        tangents = Dict{Int64, Vector{T}}()
+
+        # nadj_nodes = Dict{Int64, Int64}()
+        # coeff = props.rotate_normals ? -1.0 : 1.0
+        # for slave_element in slave_elements
+        #     c1, c2 = get_connectivity(slave_element)
+        #     x1, x2 = x[c1], x[c2]
+        #     tangent = (x2-x1) / norm(x2-x1)
+        #     normal = [-tangent[2], tangent[1]]
+        #     for c in (c1, c2)
+        #         if !haskey(nadj_nodes, c)
+        #             normals[c] = zeros(T, 2)
+        #             tangents[c] = zeros(T, 2)
+        #             nadj_nodes[c] = 0
+        #         end
+        #         normals[c] += coeff*normal
+        #         tangents[c] += coeff*tangent
+        #         nadj_nodes[c] += 1
+        #     end
+        # end
+        # for j in keys(normals)
+        #     normals[j] /= nadj_nodes[j]
+        #     tangents[j] /= nadj_nodes[j]
+        # end
+
+        #normals = empty(u)
+        #tangents = empty(u)
+        Q = [0.0 -1.0; 1.0 0.0]
+        for element in slave_elements
+            a, b = conn = get_connectivity(element)
+            X_el = (X[a], X[b])
+            x_el = (X[a]+u[a], X[b]+u[b])
+            dN = get_dbasis(element, [0.0], time)
+            t = sum([kron(dN[:,i], x_el[i]') for i=1:length(x_el)])
+            n = Q*t'
+            n /= norm(n)
+            t /= norm(t)
+            for c in conn
+                if !haskey(normals, c)
+                    normals[c] = vec(n)
+                else
+                    normals[c] += vec(n)
                 end
-                normals[c] += coeff*normal
-                tangents[c] += coeff*tangent
-                nadj_nodes[c] += 1
+                if !haskey(tangents, c)
+                    tangents[c] = vec(t)
+                else
+                    tangents[c] += vec(t)
+                end
             end
         end
-        for j in keys(normals)
-            normals[j] /= nadj_nodes[j]
-            tangents[j] /= nadj_nodes[j]
+        for nid in keys(normals)
+            normals[nid] /= norm(normals[nid])
+            tangents[nid] /= norm(tangents[nid])
         end
+        # swap element normals in 2d if they point to inside of body
+        if props.rotate_normals
+            for j in keys(normals)
+                normals[j] = -normals[j]
+                tangents[j] = -tangents[j]
+            end
+        end
+
         update!(slave_elements, "normal", time => normals)
         update!(slave_elements, "tangent", time => tangents)
 
@@ -236,11 +270,11 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             slave_element_nodes = get_connectivity(slave_element)
             c1, c2 = get_connectivity(slave_element)
             X1 = (X[c1], X[c2])
-            u1 = ((u[i] for i in slave_element_nodes)...)
-            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...)
-            la1 = ((la[i] for i in slave_element_nodes)...)
-            n1 = ((normals[i] for i in slave_element_nodes)...)
-            t1 = ((tangents[i] for i in slave_element_nodes)...)
+            u1 = ((u[i] for i in slave_element_nodes)...,)
+            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
+            la1 = ((la[i] for i in slave_element_nodes)...,)
+            n1 = ((normals[i] for i in slave_element_nodes)...,)
+            t1 = ((tangents[i] for i in slave_element_nodes)...,)
             nnodes = size(slave_element, 2)
 
             Ae = Matrix(1.0I, nnodes, nnodes)
@@ -268,8 +302,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                     master_element_nodes = get_connectivity(master_element)
                     cm1, cm2 = get_connectivity(master_element)
                     X2 = master_element("geometry", time)
-                    u2 = ((u[i] for i in master_element_nodes)...)
-                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
+                    u2 = ((u[i] for i in master_element_nodes)...,)
+                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
                     # calculate segmentation: we care only about endpoints
                     xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
@@ -313,8 +347,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                 master_element_nodes = get_connectivity(master_element)
                 X2 = master_element("geometry", time)
-                u2 = ((u[i] for i in master_element_nodes)...)
-                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...)
+                u2 = ((u[i] for i in master_element_nodes)...,)
+                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
                 #x1_midpoint = 1/2*(x1[1]+x1[2])
                 #x2_midpoint = 1/2*(x2[1]+x2[2])
@@ -411,7 +445,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             @info("Summary of nodes")
             for j in sort(collect(keys(is_active)))
                 n = map(ForwardDiff.value, normals[j])
-                info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
+                @info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
             end
         end
 

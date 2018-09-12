@@ -41,22 +41,42 @@ function to_dict(u, ndofs, nnodes)
     return Dict(j => [u[ndofs*(j-1)+i] for i=1:ndofs] for j=1:nnodes)
 end
 
+function unpack_full(assembly, ndofs)
+    K = Matrix(assembly.K, ndofs, ndofs)
+    C1 = Matrix(assembly.C1, ndofs, ndofs)
+    C2 = Matrix(assembly.C2, ndofs, ndofs)
+    D = Matrix(assembly.D, ndofs, ndofs)
+    f = Vector(assembly.f, ndofs)
+    g = Vector(assembly.g, ndofs)
+    return K, C1, C2, D, f, g
+end
+
+function calc_err(A, B)
+    err = norm(A - B)
+    err_rel = err / max(norm(A), norm(B))
+    return err, err_rel
+end
+
 ndofs = 20
 contact.properties.iteration = 1
-data = i1
-time = 0.0
 for (data, time) in zip([i1, i2, i3], [0.0, 1.0, 2.0])
-    println("Testing data for iteration / time $time ")
     empty!(contact.assembly)
     contact.assembly.u = vec(data["u"])
     contact.assembly.la = vec(data["la"])
     update!(contact, "displacement", time => to_dict(data["u"], 2, 5))
     update!(contact, "lambda", time => to_dict(data["la"], 2, 5))
     assemble!(contact, time)
-    @test isapprox(Matrix(sparse(contact.assembly.K, ndofs, ndofs)), data["K"])
-    @test isapprox(Matrix(sparse(contact.assembly.C1, ndofs, ndofs)), data["C1"])
-    @test isapprox(Matrix(sparse(contact.assembly.C2, ndofs, ndofs)), data["C2"])
-    @test isapprox(Matrix(sparse(contact.assembly.D, ndofs, ndofs)), data["D"])
-    @test isapprox(Vector(sparse(contact.assembly.f, ndofs, 1)[:]), data["f"]; atol=1.0e-9)
-    @test isapprox(Vector(sparse(contact.assembly.g, ndofs, 1)[:]), data["g"])
+
+    K, C1, C2, D, f, g = unpack_full(contact.assembly, ndofs)
+    Kerr, Kerr_rel = calc_err(K, data["K"])
+    C2err, C2err_rel = calc_err(C2, data["C2"])
+    Derr, Derr_rel = calc_err(D, data["D"])
+    @debug "Iteration at time $time" Kerr Kerr_rel C2err C2err_rel Derr Derr_rel
+
+    @test isapprox(K, data["K"])
+    @test isapprox(C1, data["C1"])
+    @test isapprox(C2, data["C2"])
+    @test isapprox(D, data["D"])
+    @test isapprox(f, data["f"]; atol=1.0e-9)
+    @test isapprox(g, data["g"])
 end
