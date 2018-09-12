@@ -169,6 +169,9 @@ function project_from_slave_to_master_ad(
 
 end
 
+function calculate_nt_basis!(normals, tangents)
+    return normals, tangents
+end
 
 function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
                                     elements::Vector{Element{Seg2}}, time::Float64)
@@ -194,67 +197,22 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         C = zeros(T, 2, nnodes)
 
         # 1. update nodal normals for slave elements
-        normals = Dict{Int64, Vector{T}}()
-        tangents = Dict{Int64, Vector{T}}()
-
-        # nadj_nodes = Dict{Int64, Int64}()
-        # coeff = props.rotate_normals ? -1.0 : 1.0
-        # for slave_element in slave_elements
-        #     c1, c2 = get_connectivity(slave_element)
-        #     x1, x2 = x[c1], x[c2]
-        #     tangent = (x2-x1) / norm(x2-x1)
-        #     normal = [-tangent[2], tangent[1]]
-        #     for c in (c1, c2)
-        #         if !haskey(nadj_nodes, c)
-        #             normals[c] = zeros(T, 2)
-        #             tangents[c] = zeros(T, 2)
-        #             nadj_nodes[c] = 0
-        #         end
-        #         normals[c] += coeff*normal
-        #         tangents[c] += coeff*tangent
-        #         nadj_nodes[c] += 1
-        #     end
-        # end
-        # for j in keys(normals)
-        #     normals[j] /= nadj_nodes[j]
-        #     tangents[j] /= nadj_nodes[j]
-        # end
-
-        #normals = empty(u)
-        #tangents = empty(u)
-        Q = [0.0 -1.0; 1.0 0.0]
+        normals = Dict{Int64, Vector{T}}(nid => zeros(T, 2) for nid in S)
+        tangents = Dict{Int64, Vector{T}}(nid => zeros(T, 2) for nid in S)
+        coeff = props.rotate_normals ? -1.0 : 1.0
         for element in slave_elements
             a, b = conn = get_connectivity(element)
-            X_el = (X[a], X[b])
-            x_el = (X[a]+u[a], X[b]+u[b])
-            dN = get_dbasis(element, [0.0], time)
-            t = sum([kron(dN[:,i], x_el[i]') for i=1:length(x_el)])
-            n = Q*t'
-            n /= norm(n)
-            t /= norm(t)
+            x1, x2 = x[a], x[b]
+            t = t1, t2 = coeff * (x2-x1) / norm(x2-x1)
+            n = [-t2, t1]
             for c in conn
-                if !haskey(normals, c)
-                    normals[c] = vec(n)
-                else
-                    normals[c] += vec(n)
-                end
-                if !haskey(tangents, c)
-                    tangents[c] = vec(t)
-                else
-                    tangents[c] += vec(t)
-                end
+                normals[c] += n
+                tangents[c] += t
             end
         end
         for nid in keys(normals)
             normals[nid] /= norm(normals[nid])
             tangents[nid] /= norm(tangents[nid])
-        end
-        # swap element normals in 2d if they point to inside of body
-        if props.rotate_normals
-            for j in keys(normals)
-                normals[j] = -normals[j]
-                tangents[j] = -tangents[j]
-            end
         end
 
         update!(slave_elements, "normal", time => normals)
