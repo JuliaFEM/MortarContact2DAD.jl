@@ -34,6 +34,10 @@ function FEMBase.get_master_elements(problem::Problem{Mortar2DAD})
     return problem.properties.master_elements
 end
 
+function FEMBase.get_elements(problem::Problem{Mortar2DAD})
+    return [get_slave_elements(problem); get_master_elements(problem)]
+end
+
 function get_slave_dofs(problem::Problem{Mortar2DAD})
     dofs = Int64[]
     for element in get_slave_elements(problem)

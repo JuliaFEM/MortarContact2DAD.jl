@@ -16,11 +16,27 @@ mutable struct Contact2DAD <: BoundaryProblem
     nadj_nodes :: Dict{Int64, Real}
     scaling_factors :: Dict{Int64, Real}
     print_summary :: Bool
+    contact_pairs :: Dict{Element, Set{Element}}
 end
 
 function Contact2DAD()
-    return Contact2DAD([], false, true, 0, :AUTO, Set(),
-                        true, Dict(), Dict(), Dict(), Dict(), false)
+    master_elements = []
+    rotate_normals = false
+    dual_basis = true
+    iteration = 0
+    contact_state_in_first_iteration = :AUTO
+    always_in_contact = Set()
+    use_scaling = true
+    alpha = Dict()
+    beta = Dict()
+    nadj_nodes = Dict()
+    scaling_factors = Dict()
+    print_summary = true
+    contact_pairs = Dict()
+    return Contact2DAD(master_elements, rotate_normals, dual_basis, iteration,
+                       contact_state_in_first_iteration, always_in_contact,
+                       use_scaling, alpha, beta, nadj_nodes, scaling_factors,
+                       print_summary, contact_pairs)
 end
 
 function FEMBase.add_elements!(::Problem{Contact2DAD}, ::Any)
@@ -48,6 +64,14 @@ function FEMBase.get_master_elements(problem::Problem{Contact2DAD})
     return problem.properties.master_elements
 end
 
+function FEMBase.get_elements(problem::Problem{Contact2DAD})
+    return [get_slave_elements(problem); get_master_elements(problem)]
+end
+
+function FEMBase.get_master_elements(problem::Problem{Contact2DAD}, slave_element::Element)
+    return problem.properties.contact_pairs[slave_element]
+end
+
 function get_slave_dofs(problem::Problem{Contact2DAD})
     dofs = Int64[]
     for element in get_slave_elements(problem)
@@ -72,6 +96,16 @@ function get_master_dofs(problem::Problem{Contact2DAD})
         append!(dofs, get_gdofs(problem, element))
     end
     return sort(unique(dofs))
+end
+
+function get_master_nodes(problem::Problem{Contact2DAD})
+    nodes = Set{Int64}()
+    for element in get_master_elements(problem)
+        for j in get_connectivity(element)
+            push!(nodes, j)
+        end
+    end
+    return nodes
 end
 
 """ Find segment from slave element corresponding to master element nodes.
@@ -113,8 +147,9 @@ function project_from_master_to_slave_ad(
     dxi1 = 0.0
     for i=1:max_iterations
         dxi1 = -R(xi1)/dR(xi1)
-        dxi1 = clamp.(dxi1, -0.3, 0.3)
-        xi1_next = clamp.(xi1 + dxi1, -1.0, 1.0)
+        # dxi1 = clamp.(dxi1, -0.3, 0.3)
+        # xi1_next = clamp.(xi1 + dxi1, -1.0, 1.0)
+        xi1_next = xi1 + dxi1
         if norm(xi1_next - xi1) < tol
             return xi1_next
         end
@@ -169,8 +204,62 @@ function project_from_slave_to_master_ad(
 
 end
 
-function calculate_nt_basis!(normals, tangents)
-    return normals, tangents
+function project_from_slave_to_master(::Type{Val{:Seg2}}, x1, n1, xm1, xm2)
+    x11, x12 = x1
+    n11, n12 = n1
+    x31, x32 = xm1
+    x41, x42 = xm2
+    nom = -2*n11*x12 + n11*x32 + n11*x42 + 2*n12*x11 - n12*x31 - n12*x41
+    denom = n11*x32 - n11*x42 - n12*x31 + n12*x41
+    return nom/denom
+end
+
+function project_from_master_to_slave(::Type{Val{:Seg2}}, xm, xs1, xs2, ns1, ns2)
+
+    # @debug("Projecting vertex `m` to slave surface with nodes (xs1, xs2) and node normals (ns1, ns2)",
+    #        xm, xs1, xs2, ns1, ns2)
+
+    x11, x12 = xs1
+    x21, x22 = xs2
+    x31, x32 = xm
+    n11, n12 = ns1
+    n21, n22 = ns2
+    a = (-n11*x12 + n11*x22 + n12*x11 - n12*x21 + n21*x12 - n21*x22 - n22*x11 + n22*x21)/4
+    if isapprox(a, 0.0; atol=1.0e-3)
+        nom = n11*x12 + n11*x22 - 2*n11*x32 - n12*x11 - n12*x21 + 2*n12*x31
+        denom = n11*x12 - n11*x22 - n12*x11 + n12*x21
+        return nom/denom
+    end
+    b = -(-n11*x12 + n11*x32 + n12*x11 - n12*x31 + n21*x22 - n21*x32 - n22*x21 + n22*x31)/2
+    c = (-n11*x12 - n11*x22 + 2*n11*x32 + n12*x11 + n12*x21 - 2*n12*x31 - n21*x12 - n21*x22 + 2*n21*x32 + n22*x11 + n22*x21 - 2*n22*x31)/4
+    d = b^2 - 4*a*c
+    if d < 0.0
+        xm = map(value, xm)
+        xs1 = map(value, xs1)
+        xs2 = map(value, xs2)
+        ns1 = map(value, ns1)
+        ns2 = map(value, ns2)
+        a = value(a)
+        b = value(b)
+        c = value(c)
+        d = value(d)
+        @error("xm = $xm")
+        @error("xs1 = $xs1")
+        @error("xs2 = $xs2")
+        @error("ns1 = $ns1")
+        @error("ns2 = $ns2")
+        @error("a = $a, b = $b, c = $c, d = $d")
+        error("When projecting from master to slave, got error. Negative discriminant.")
+    end
+    sol1 = 1.0/(2.0*a)*(-b+sqrt(d))
+    sol2 = 1.0/(2.0*a)*(-b-sqrt(d))
+    if abs(sol1) < abs(sol2)
+        return sol1
+    else
+        return sol2
+    end
+    #sols = [-b+sqrt(d), -b-sqrt(d)]/(2.0*a)
+    #return sols[argmin(abs.(sols))]
 end
 
 function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
@@ -182,6 +271,71 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     slave_elements = get_slave_elements(problem)
     X = problem("geometry", time)
     S = get_slave_nodes(problem)
+
+    if props.iteration == 1
+        @info("First iteration, creating contact pairing.")
+        @info("Calculate nodal normals ...")
+        normals = Dict{Int64, Vector{Float64}}(nid => zeros(Float64, 2) for nid in S)
+        coeff = props.rotate_normals ? -1.0 : 1.0
+        for slave_element in slave_elements
+            a, b = conn = get_connectivity(slave_element)
+            X1 = slave_element("geometry", time)
+            u1 = slave_element("displacement", time)
+            x1, x2 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
+            t = t1, t2 = coeff * (x2-x1) / norm(x2-x1)
+            n = [-t2, t1]
+            for c in conn
+                normals[c] += n
+            end
+        end
+        for nid in keys(normals)
+            normals[nid] /= norm(normals[nid])
+        end
+        @info("Calculate contact pairs ...")
+        for slave_element in slave_elements
+            slave_element_nodes = get_connectivity(slave_element)
+            c1, c2 = get_connectivity(slave_element)
+            X1 = slave_element("geometry", time)
+            if haskey(slave_element, "displacement")
+                u1 = slave_element("displacement", time)
+                x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
+            else
+                x1 = X1
+            end
+            n1 = ((normals[i] for i in slave_element_nodes)...,)
+            master_elements = Set{Element}()
+            @debug("Loop master elements ...")
+            for master_element in get_master_elements(problem)
+                master_element_nodes = get_connectivity(master_element)
+                cm1, cm2 = get_connectivity(master_element)
+                X2 = master_element("geometry", time)
+                if haskey(master_element, "displacement")
+                    u2 = master_element("displacement", time)
+                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+                else
+                    x2 = X2
+                end
+
+                x1_midpoint = 1/2*(x1[1]+x1[2])
+                x2_midpoint = 1/2*(x2[1]+x2[2])
+                distance = norm(x2_midpoint - x1_midpoint)
+                distance > 3.0*norm(x1[2]-x1[1]) && continue
+
+                xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
+                xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
+                xi1a = clamp(xi1a, -1.0, 1.0)
+                xi1b = clamp(xi1b, -1.0, 1.0)
+                l = 1/2*abs(xi1b-xi1a)
+                isapprox(l, 0.0) && continue
+                push!(master_elements, master_element)
+            end
+            n = length(master_elements)
+            @info("Contact slave element $(slave_element.id) has $n master elements.")
+            props.contact_pairs[slave_element] = master_elements
+        end
+    end
+
+    n_evaluations = 0
 
     function calculate_interface(x::Vector{T}) where {T}
 
@@ -255,7 +409,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                 nsegments = 0
 
-                for master_element in get_master_elements(problem)
+                for master_element in get_master_elements(problem, slave_element)
 
                     master_element_nodes = get_connectivity(master_element)
                     cm1, cm2 = get_connectivity(master_element)
@@ -264,10 +418,49 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                     x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
                     # calculate segmentation: we care only about endpoints
-                    xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
-                    xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
-                    xi1 = clamp.([xi1a; xi1b], -1.0, 1.0)
-                    l = 1/2*abs(xi1[2]-xi1[1])
+                    xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
+                    xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
+                    xi1a = clamp(xi1a, -1.0, 1.0)
+                    xi1b = clamp(xi1b, -1.0, 1.0)
+
+                    # xi1a_nl = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
+                    # xi1b_nl = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
+                    # xi1a_nl = clamp(xi1a_nl, -1.0, 1.0)
+                    # xi1b_nl = clamp(xi1b_nl, -1.0, 1.0)
+
+                    # if !isapprox(xi1a, xi1a_nl)
+                    #     xm = map(value, x2[1])
+                    #     xs1 = map(value, x1[1])
+                    #     xs2 = map(value, x1[2])
+                    #     ns1 = map(value, n1[1])
+                    #     ns2 = map(value, n1[2])
+                    #     xi1a = value(xi1a)
+                    #     xi1a_ad = value(xi1a_nl)
+                    #     @error("Two different projection algorithm failed with data")
+                    #     @error("xm = $xm")
+                    #     @error("xs1 = $xs1")
+                    #     @error("xs2 = $xs2")
+                    #     @error("ns1 = $ns1")
+                    #     @error("ns2 = $ns2")
+                    #     @error("xi1a = $xi1a")
+                    #     @error("xi1a(ad) = $xi1a_ad")
+                    #     error("Not continuing.")
+                    # end
+                    # if !isapprox(xi1b, xi1b_nl)
+                    #     xm = map(value, x2[2])
+                    #     xs1 = map(value, x1[1])
+                    #     xs2 = map(value, x1[2])
+                    #     ns1 = map(value, n1[1])
+                    #     ns2 = map(value, n1[2])
+                    #     xi1b = value(xi1b)
+                    #     xi1b_ad = value(xi1b_nl)
+                    #     @error("Two different projection algorithm failed with data",
+                    #             xm, xs1, xs2, ns1, ns2, xi1b, xi1b_ad)
+                    #     error("Not continuing.")
+                    # end
+
+                    xi1 = [xi1a, xi1b]
+                    l = 1/2*abs(xi1b-xi1a)
                     isapprox(l, 0.0) && continue # no contribution in this master element
 
                     nsegments += 1
@@ -301,21 +494,18 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             end
 
             # 3. loop all master elements
-            for master_element in get_master_elements(problem)
+            for master_element in get_master_elements(problem, slave_element)
 
                 master_element_nodes = get_connectivity(master_element)
                 X2 = master_element("geometry", time)
                 u2 = ((u[i] for i in master_element_nodes)...,)
                 x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
 
-                #x1_midpoint = 1/2*(x1[1]+x1[2])
-                #x2_midpoint = 1/2*(x2[1]+x2[2])
-                #distance = ForwardDiff.get_value(norm(x2_midpoint - x1_midpoint))
-                #distance > props.maximum_distance && continue
-
                 # calculate segmentation: we care only about endpoints
-                xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
-                xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
+                xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
+                xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
+                #xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
+                #xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
                 xi1 = clamp.([xi1a; xi1b], -1.0, 1.0)
                 l = 1/2*abs(xi1[2]-xi1[1])
                 isapprox(l, 0.0) && continue # no contribution in this master element
@@ -337,7 +527,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                     x_s = interpolate(N1, x1) # coordinate in gauss point
                     n_s = interpolate(N1, n1) # normal direction in gauss point
                     t_s = interpolate(N1, t1) # tangent direction in gauss point
-                    xi_m = project_from_slave_to_master_ad(master_element, x_s, n_s, x2)
+                    #xi_m = project_from_slave_to_master_ad(master_element, x_s, n_s, x2)
+                    xi_m = project_from_slave_to_master(Val{:Seg2}, x_s, n_s, x2[1], x2[2])
                     N2 = vec(get_basis(master_element, xi_m, time))
                     x_m = interpolate(N2, x2)
                     Phi = Ae*N1
@@ -432,18 +623,49 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             update!(slave_elements, "contact scaling", time => scaling)
         end
 
+        n_evaluations += 1
+
         return vec([fc C])
 
     end
 
-    # x doesn't mean deformed configuration here
-    x = [problem.assembly.u; problem.assembly.la]
-    if length(x) == 0
-        error("2d autodiff contact problem: initialize problem.assembly.u & la before solution")
+    # Next, construct vector x = [u; la] what we are going to use as input
+    S = get_slave_nodes(problem)
+    M = get_master_nodes(problem)
+    max_node_id = max(maximum(S), maximum(M))
+    n_slave_nodes = length(S)
+    n_master_nodes = length(M)
+    @info("Interface statistics", max_node_id, n_slave_nodes, n_master_nodes)
+
+    ndofs = max_node_id * 2
+    if max_node_id > n_slave_nodes+n_master_nodes
+        warn("highly unefficient differentiation coming.")
     end
 
-    A = ForwardDiff.jacobian(calculate_interface, x)
-    b = calculate_interface(x)
+    if length(problem.assembly.u) == 0
+        error("2d autodiff contact problem: initialize problem.assembly.u & la before solution")
+    end
+    x = [problem.assembly.u[1:ndofs]; problem.assembly.la[1:ndofs]]
+    chunk_size = length(x)
+    @info("ndofs = $ndofs, chunk size = $chunk_size")
+    chunk = ForwardDiff.Chunk{chunk_size}()
+    cfg = ForwardDiff.JacobianConfig(calculate_interface, x, chunk)
+
+    result = DiffResults.JacobianResult(x)
+    result = ForwardDiff.jacobian!(result, calculate_interface, x, cfg)
+    #result = ForwardDiff.jacobian!(result, calculate_interface, x)
+    A = DiffResults.jacobian(result)
+    b = DiffResults.value(result)
+    @info("Interface was evaluated $n_evaluations times during automatic differentiation.")
+
+    # x doesn't mean deformed configuration here
+    # x = [problem.assembly.u; problem.assembly.la]
+    # if length(x) == 0
+    #     error("2d autodiff contact problem: initialize problem.assembly.u & la before solution")
+    # end
+    # A = ForwardDiff.jacobian(calculate_interface, x)
+    # b = calculate_interface(x)
+
     A = sparse(A)
     b = -sparse(b)
     SparseArrays.droptol!(A, 1.0e-9)
@@ -457,27 +679,23 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     f = b[1:ndofs]
     g = b[ndofs+1:end]
 
-    f += C1*problem.assembly.la
-    g += D*problem.assembly.la
+    f += C1*problem.assembly.la[1:ndofs]
+    g += D*problem.assembly.la[1:ndofs]
 
-    #=
-    if !haskey(problem, "contact force")
-        problem.fields["contact force"] = Field(time => f)
-    else
-        update!(problem.fields["contact force"], time => f)
-    end
-
-    fc = problem.fields["contact force"]
-
-    if length(fc) > 1
-        # kick in generalized alpha rule for time integration
-        alpha = 0.5
-        info("Applying Generalized alpha time integration")
-        K = (1-alpha)*K
-        C1 = (1-alpha)*C1
-        f = alpha*fc[end-1].data
-    end
-    =#
+    # if !haskey(problem, "contact force")
+    #     problem.fields["contact force"] = field(time => f)
+    # else
+    #     update!(problem.fields["contact force"], time => f)
+    # end
+    # fc = problem.fields["contact force"]
+    # if length(fc) > 1
+    #     # kick in generalized alpha rule for time integration
+    #     alpha = 0.5
+    #     @info("Applying Generalized alpha time integration")
+    #     K = (1-alpha)*K
+    #     C1 = (1-alpha)*C1
+    #     f = alpha*fc[end-1].data
+    # end
 
     problem.assembly.K = K
     problem.assembly.C1 = copy(transpose(C1))
