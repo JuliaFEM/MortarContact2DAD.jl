@@ -108,102 +108,6 @@ function get_master_nodes(problem::Problem{Contact2DAD})
     return nodes
 end
 
-""" Find segment from slave element corresponding to master element nodes.
-
-Parameters
-----------
-x1_, n1_
-    slave element geometry and normal direction
-x2
-    master element node to project onto slave
-
-Returns
--------
-xi
-    dimensionless coordinate on slave corresponding to
-    projected master
-
-"""
-function project_from_master_to_slave_ad(
-    slave_element::Element{E}, x1_::DVTI, n1_::DVTI, x2::Vector;
-    tol=1.0e-10, max_iterations=20, debug=false) where E<:MortarElements2D
-
-    """ Multiply basis / dbasis at `xi` with field. """
-    function mul(func, xi, field)
-        B = func(slave_element, [xi], time)
-        return sum(B[i]*field[i] for i=1:length(B))
-    end
-
-    x1(xi1) = mul(get_basis, xi1, x1_)
-    dx1(xi1) = mul(get_dbasis, xi1, x1_)
-    n1(xi1) = mul(get_basis, xi1, n1_)
-    dn1(xi1) = mul(get_dbasis, xi1, n1_)
-    cross2(a, b) = cross([a; 0], [b; 0])[3]
-    R(xi1) = cross2(x1(xi1)-x2, n1(xi1))
-    dR(xi1) = cross2(dx1(xi1), n1(xi1)) + cross2(x1(xi1)-x2, dn1(xi1))
-
-    xi1 = 0.0
-    xi1_next = 0.0
-    dxi1 = 0.0
-    for i=1:max_iterations
-        dxi1 = -R(xi1)/dR(xi1)
-        # dxi1 = clamp.(dxi1, -0.3, 0.3)
-        # xi1_next = clamp.(xi1 + dxi1, -1.0, 1.0)
-        xi1_next = xi1 + dxi1
-        if norm(xi1_next - xi1) < tol
-            return xi1_next
-        end
-        if debug
-            @info("Debug data for iteration $i")
-            @info("xi1 = $(value(xi1))")
-            @info("R(xi1) = $(value(R(xi1)))")
-            @info("dR(xi1) = $(value(dR(xi1)))")
-            @info("dxi1 = $(value(dxi1))")
-            @info("norm = $(value(norm(xi1_next - xi1)))")
-            @info("xi1_next = $(value(xi1_next))")
-        end
-        xi1 = xi1_next
-    end
-
-    @info("Projection algorithm failed with the following data:")
-    a, b = x1_.data
-    @info("x11 = $(map(value, a))")
-    @info("x12 = $(map(value, b))")
-    a, b = n1_.data
-    @info("n11 = $(map(value, a))")
-    @info("n12 = $(map(value, b))")
-    @info("x2 = $(map(value, x2))")
-    @info("xi1 = $(value(xi1)), dxi1 = $(value(dxi1))")
-    @info("-R(xi1) = $(value(-R(xi1)))")
-    @info("dR(xi1) = $(value(dR(xi1)))")
-    error("find projection from master to slave: did not converge")
-
-end
-
-function project_from_slave_to_master_ad(
-    master_element::Element{E}, x1, n1, x2_;
-    tol=1.0e-10, max_iterations=20) where E<:MortarElements2D
-
-    x2(xi2) = interpolate(vec(get_basis(master_element, [xi2], time)), x2_)
-    dx2(xi2) = interpolate(vec(get_dbasis(master_element, [xi2], time)), x2_)
-    cross2(a, b) = cross([a; 0], [b; 0])[3]
-    R(xi2) = cross2(x2(xi2)-x1, n1)
-    dR(xi2) = cross2(dx2(xi2), n1)
-
-    xi2 = 0.0
-    dxi2 = 0.0
-    for i=1:max_iterations
-        dxi2 = -R(xi2) / dR(xi2)
-        xi2 += dxi2
-        if norm(dxi2) < tol
-            return xi2
-        end
-    end
-
-    error("find projection from slave to master: did not converge, last val: $xi2 and $dxi2")
-
-end
-
 function project_from_slave_to_master(::Type{Val{:Seg2}}, x1, n1, xm1, xm2)
     x11, x12 = x1
     n11, n12 = n1
@@ -215,9 +119,6 @@ function project_from_slave_to_master(::Type{Val{:Seg2}}, x1, n1, xm1, xm2)
 end
 
 function project_from_master_to_slave(::Type{Val{:Seg2}}, xm, xs1, xs2, ns1, ns2)
-
-    # @debug("Projecting vertex `m` to slave surface with nodes (xs1, xs2) and node normals (ns1, ns2)",
-    #        xm, xs1, xs2, ns1, ns2)
 
     x11, x12 = xs1
     x21, x22 = xs2
@@ -258,8 +159,78 @@ function project_from_master_to_slave(::Type{Val{:Seg2}}, xm, xs1, xs2, ns1, ns2
     else
         return sol2
     end
-    #sols = [-b+sqrt(d), -b-sqrt(d)]/(2.0*a)
-    #return sols[argmin(abs.(sols))]
+end
+
+function assemble_elements_preprocess!(problem::Problem{Contact2DAD}, assembly::Assembly,
+                                       elements::Vector{Element{Seg2}}, time::Float64)
+
+    @debug("First iteration, creating contact pairing in preprocess.")
+
+    S = get_slave_nodes(problem)
+    slave_elements = get_slave_elements(problem)
+    props = problem.properties
+
+    @debug("Calculate nodal normals")
+    normals = Dict{Int64, Vector{Float64}}(nid => zeros(Float64, 2) for nid in S)
+    coeff = props.rotate_normals ? -1.0 : 1.0
+    for slave_element in slave_elements
+        conn = get_connectivity(slave_element)
+        X1 = slave_element("geometry", time)
+        u1 = slave_element("displacement", time)
+        # @info("slave element info", X1, u1)
+        x1, x2 = tuple((Xi+ui for (Xi,ui) in zip(X1,u1))...)
+        t1, t2 = coeff * (x2-x1) / norm(x2-x1)
+        n = [-t2, t1]
+        for c in conn
+            normals[c] += n
+        end
+    end
+
+    for nid in keys(normals)
+        normals[nid] /= norm(normals[nid])
+    end
+
+    @debug("Calculate contact pairs")
+    for slave_element in slave_elements
+        slave_element_nodes = get_connectivity(slave_element)
+        c1, c2 = get_connectivity(slave_element)
+        X1 = slave_element("geometry", time)
+        if haskey(slave_element, "displacement")
+            u1 = slave_element("displacement", time)
+            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
+        else
+            x1 = X1
+        end
+        n1 = ((normals[i] for i in slave_element_nodes)...,)
+        master_elements = Set{Element}()
+        for master_element in get_master_elements(problem)
+            master_element_nodes = get_connectivity(master_element)
+            cm1, cm2 = get_connectivity(master_element)
+            X2 = master_element("geometry", time)
+            if haskey(master_element, "displacement")
+                u2 = master_element("displacement", time)
+                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+            else
+                x2 = X2
+            end
+
+            x1_midpoint = 1/2*(x1[1]+x1[2])
+            x2_midpoint = 1/2*(x2[1]+x2[2])
+            distance = norm(x2_midpoint - x1_midpoint)
+            distance > 3.0*norm(x1[2]-x1[1]) && continue
+
+            xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
+            xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
+            xi1a = clamp(xi1a, -1.0, 1.0)
+            xi1b = clamp(xi1b, -1.0, 1.0)
+            l = 1/2*abs(xi1b-xi1a)
+            isapprox(l, 0.0) && continue
+            push!(master_elements, master_element)
+        end
+        n = length(master_elements)
+        @debug("Contact slave element $(slave_element.id) has $n master elements.")
+        props.contact_pairs[slave_element] = master_elements
+    end
 end
 
 function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Assembly,
@@ -271,68 +242,10 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
     slave_elements = get_slave_elements(problem)
     X = problem("geometry", time)
     S = get_slave_nodes(problem)
+    M = get_master_nodes(problem)
 
     if props.iteration == 1
-        @info("First iteration, creating contact pairing.")
-        @info("Calculate nodal normals ...")
-        normals = Dict{Int64, Vector{Float64}}(nid => zeros(Float64, 2) for nid in S)
-        coeff = props.rotate_normals ? -1.0 : 1.0
-        for slave_element in slave_elements
-            a, b = conn = get_connectivity(slave_element)
-            X1 = slave_element("geometry", time)
-            u1 = slave_element("displacement", time)
-            x1, x2 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
-            t = t1, t2 = coeff * (x2-x1) / norm(x2-x1)
-            n = [-t2, t1]
-            for c in conn
-                normals[c] += n
-            end
-        end
-        for nid in keys(normals)
-            normals[nid] /= norm(normals[nid])
-        end
-        @info("Calculate contact pairs ...")
-        for slave_element in slave_elements
-            slave_element_nodes = get_connectivity(slave_element)
-            c1, c2 = get_connectivity(slave_element)
-            X1 = slave_element("geometry", time)
-            if haskey(slave_element, "displacement")
-                u1 = slave_element("displacement", time)
-                x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
-            else
-                x1 = X1
-            end
-            n1 = ((normals[i] for i in slave_element_nodes)...,)
-            master_elements = Set{Element}()
-            @debug("Loop master elements ...")
-            for master_element in get_master_elements(problem)
-                master_element_nodes = get_connectivity(master_element)
-                cm1, cm2 = get_connectivity(master_element)
-                X2 = master_element("geometry", time)
-                if haskey(master_element, "displacement")
-                    u2 = master_element("displacement", time)
-                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
-                else
-                    x2 = X2
-                end
-
-                x1_midpoint = 1/2*(x1[1]+x1[2])
-                x2_midpoint = 1/2*(x2[1]+x2[2])
-                distance = norm(x2_midpoint - x1_midpoint)
-                distance > 3.0*norm(x1[2]-x1[1]) && continue
-
-                xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
-                xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
-                xi1a = clamp(xi1a, -1.0, 1.0)
-                xi1b = clamp(xi1b, -1.0, 1.0)
-                l = 1/2*abs(xi1b-xi1a)
-                isapprox(l, 0.0) && continue
-                push!(master_elements, master_element)
-            end
-            n = length(master_elements)
-            @info("Contact slave element $(slave_element.id) has $n master elements.")
-            props.contact_pairs[slave_element] = master_elements
-        end
+        assemble_elements_preprocess!(problem, assembly, elements, time)
     end
 
     n_evaluations = 0
@@ -344,7 +257,7 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         nnodes = Int(ndofs/dim)
         u = Dict(j => [x[dim*(j-1)+i] for i=1:dim] for j=1:nnodes)
         la = Dict(j => [x[dim*(j-1)+i+ndofs] for i=1:dim] for j=1:nnodes)
-        x = Dict(j => X[j]+u[j] for j in S)
+        x = Dict(j => X[j]+u[j] for j in union(S, M))
 
         fc = zeros(T, 2, nnodes)
         gap = zeros(T, 2, nnodes)
@@ -382,11 +295,11 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             slave_element_nodes = get_connectivity(slave_element)
             c1, c2 = get_connectivity(slave_element)
             X1 = (X[c1], X[c2])
-            u1 = ((u[i] for i in slave_element_nodes)...,)
-            x1 = ((Xi+ui for (Xi,ui) in zip(X1,u1))...,)
-            la1 = ((la[i] for i in slave_element_nodes)...,)
-            n1 = ((normals[i] for i in slave_element_nodes)...,)
-            t1 = ((tangents[i] for i in slave_element_nodes)...,)
+            u1 = (u[c1], u[c2])
+            x1 = (x[c1], x[c2])
+            la1 = (la[c1], la[c2])
+            n1 = (normals[c1], normals[c2])
+            t1 = (tangents[c1], tangents[c2])
             nnodes = size(slave_element, 2)
 
             Ae = Matrix(1.0I, nnodes, nnodes)
@@ -413,53 +326,15 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
 
                     master_element_nodes = get_connectivity(master_element)
                     cm1, cm2 = get_connectivity(master_element)
-                    X2 = master_element("geometry", time)
-                    u2 = ((u[i] for i in master_element_nodes)...,)
-                    x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+                    X2 = (X[cm1], X[cm2])
+                    u2 = (u[cm1], u[cm2])
+                    x2 = (x[cm1], x[cm2])
 
                     # calculate segmentation: we care only about endpoints
                     xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
                     xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
                     xi1a = clamp(xi1a, -1.0, 1.0)
                     xi1b = clamp(xi1b, -1.0, 1.0)
-
-                    # xi1a_nl = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
-                    # xi1b_nl = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
-                    # xi1a_nl = clamp(xi1a_nl, -1.0, 1.0)
-                    # xi1b_nl = clamp(xi1b_nl, -1.0, 1.0)
-
-                    # if !isapprox(xi1a, xi1a_nl)
-                    #     xm = map(value, x2[1])
-                    #     xs1 = map(value, x1[1])
-                    #     xs2 = map(value, x1[2])
-                    #     ns1 = map(value, n1[1])
-                    #     ns2 = map(value, n1[2])
-                    #     xi1a = value(xi1a)
-                    #     xi1a_ad = value(xi1a_nl)
-                    #     @error("Two different projection algorithm failed with data")
-                    #     @error("xm = $xm")
-                    #     @error("xs1 = $xs1")
-                    #     @error("xs2 = $xs2")
-                    #     @error("ns1 = $ns1")
-                    #     @error("ns2 = $ns2")
-                    #     @error("xi1a = $xi1a")
-                    #     @error("xi1a(ad) = $xi1a_ad")
-                    #     error("Not continuing.")
-                    # end
-                    # if !isapprox(xi1b, xi1b_nl)
-                    #     xm = map(value, x2[2])
-                    #     xs1 = map(value, x1[1])
-                    #     xs2 = map(value, x1[2])
-                    #     ns1 = map(value, n1[1])
-                    #     ns2 = map(value, n1[2])
-                    #     xi1b = value(xi1b)
-                    #     xi1b_ad = value(xi1b_nl)
-                    #     @error("Two different projection algorithm failed with data",
-                    #             xm, xs1, xs2, ns1, ns2, xi1b, xi1b_ad)
-                    #     error("Not continuing.")
-                    # end
-
-                    xi1 = [xi1a, xi1b]
                     l = 1/2*abs(xi1b-xi1a)
                     isapprox(l, 0.0) && continue # no contribution in this master element
 
@@ -470,8 +345,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                         j = sum([kron(dN[:,i], x1[i]') for i=1:length(x1)])
                         detj = norm(j)
                         w = ip.weight*norm(j)*l
-                        xi = ip.coords[1]
-                        xi_s = dot([1/2*(1-xi); 1/2*(1+xi)], xi1)
+                        xi = first(ip.coords)
+                        xi_s = 1/2*(1-xi)*xi1a + 1/2*(1+xi)*xi1b
                         N1 = get_basis(slave_element, xi_s, time)
                         De += w*Matrix(Diagonal(vec(N1)))
                         Me += w*N1'*N1
@@ -497,17 +372,17 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
             for master_element in get_master_elements(problem, slave_element)
 
                 master_element_nodes = get_connectivity(master_element)
-                X2 = master_element("geometry", time)
-                u2 = ((u[i] for i in master_element_nodes)...,)
-                x2 = ((Xi+ui for (Xi,ui) in zip(X2,u2))...,)
+                cm1, cm2 = get_connectivity(master_element)
+                X2 = (X[cm1], X[cm2])
+                u2 = (u[cm1], u[cm2])
+                x2 = (x[cm1], x[cm2])
 
                 # calculate segmentation: we care only about endpoints
                 xi1a = project_from_master_to_slave(Val{:Seg2}, x2[1], x1[1], x1[2], n1[1], n1[2])
                 xi1b = project_from_master_to_slave(Val{:Seg2}, x2[2], x1[1], x1[2], n1[1], n1[2])
-                #xi1a = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[1])
-                #xi1b = project_from_master_to_slave_ad(slave_element, field(x1), field(n1), x2[2])
-                xi1 = clamp.([xi1a; xi1b], -1.0, 1.0)
-                l = 1/2*abs(xi1[2]-xi1[1])
+                xi1a = clamp(xi1a, -1.0, 1.0)
+                xi1b = clamp(xi1b, -1.0, 1.0)
+                l = 1/2*abs(xi1b-xi1a)
                 isapprox(l, 0.0) && continue # no contribution in this master element
 
                 slave_dofs = get_gdofs(problem, slave_element)
@@ -521,8 +396,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
                     w = ip.weight*norm(j)*l
 
                     # project gauss point from slave element to master element
-                    xi = ip.coords[1]
-                    xi_s = dot([1/2*(1-xi); 1/2*(1+xi)], xi1)
+                    xi = first(ip.coords)
+                    xi_s = 1/2*(1-xi)*xi1a + 1/2*(1+xi)*xi1b
                     N1 = vec(get_basis(slave_element, xi_s, time))
                     x_s = interpolate(N1, x1) # coordinate in gauss point
                     n_s = interpolate(N1, n1) # normal direction in gauss point
@@ -581,20 +456,28 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         if problem.properties.iteration == 1 && state == :ACTIVE
             for j in S
                 is_active[j] = true
+                condition[j] = 0.0
             end
         end
 
         if problem.properties.iteration == 1 && state == :INACTIVE
             for j in S
                 is_active[j] = false
+                condition[j] = 0.0
             end
         end
 
         if problem.properties.print_summary
             @info("Summary of nodes")
-            for j in sort(collect(keys(is_active)))
-                n = map(ForwardDiff.value, normals[j])
-                @info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
+            if problem.properties.iteration == 1 && state == :ACTIVE
+                @info("Contact state in first iteration determined to be ACTIVE")
+            elseif problem.properties.iteration == 1 && state == :INACTIVE
+                @info("Contact state in first iteration determined to be INACTIVE")
+            else
+                for j in sort(collect(keys(is_active)))
+                    n = map(ForwardDiff.value, normals[j])
+                    @info("$j, c=$(condition[j]), s=$(is_active[j]), n=$n")
+                end
             end
         end
 

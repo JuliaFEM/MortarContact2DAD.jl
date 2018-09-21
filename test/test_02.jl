@@ -58,8 +58,8 @@ function calc_err(A, B)
 end
 
 ndofs = 20
-contact.properties.iteration = 1
 for (data, time) in zip([i1, i2, i3], [0.0, 1.0, 2.0])
+    contact.properties.iteration = 0
     empty!(contact.assembly)
     contact.assembly.u = vec(data["u"])
     contact.assembly.la = vec(data["la"])
