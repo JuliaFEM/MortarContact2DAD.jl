@@ -19,6 +19,7 @@ mesh.nodes = Dict(renumber[i] => j for (i,j) in mesh.nodes)
 mesh.elements = Dict(i => [renumber[c] for c in j] for (i,j) in mesh.elements)
 mesh.node_sets = Dict(n => Set(renumber[j] for j in v) for (n,v) in mesh.node_sets)
 contact = Problem(Contact2DAD, "interface", 2, "displacement")
+contact.properties.algorithm = 2
 contact_slave_elements = create_elements(mesh, "TOOL_TO_BLOCK")
 contact_master_elements = create_elements(mesh, "BLOCK_TO_TOOL")
 add_slave_elements!(contact, contact_slave_elements)
@@ -44,21 +45,23 @@ update!(contact_slave_elements, "lambda", 0.0 => to_dict(contact.assembly.la, 2,
 contact.properties.iteration = 0
 assemble!(contact, 0.0)
 
-K = Matrix(contact.assembly.K)
 K_expected = get_mtx("K")
-@test isapprox(K, K_expected)
-C1 = Matrix(contact.assembly.C1)
 C1_expected = get_mtx("C1")
-@test isapprox(C1, C1_expected)
-C2 = Matrix(contact.assembly.C2)
 C2_expected = get_mtx("C2")
-@test isapprox(C2, C2_expected)
-D = Matrix(contact.assembly.D)
 D_expected = get_mtx("D")
-@test isapprox(D, D_expected)
-f = Vector(contact.assembly.f, 190)
 f_expected = get_mtx("f")[:]
-@test isapprox(f, f_expected; atol=1.0e-9)
-g = Vector(contact.assembly.g, 30)
 g_expected = get_mtx("g")[:]
+
+K = Matrix(contact.assembly.K)
+C1 = Matrix(contact.assembly.C1)
+C2 = Matrix(contact.assembly.C2)
+D = Matrix(contact.assembly.D)
+f = Vector(contact.assembly.f, 190)
+g = Vector(contact.assembly.g, 30)
+
+@test isapprox(K, K_expected)
+@test isapprox(C1, C1_expected)
+@test isapprox(C2, C2_expected)
+@test isapprox(D, D_expected)
+@test isapprox(f, f_expected; atol=1.0e-9)
 @test isapprox(g, g_expected; atol=1.0e-9)

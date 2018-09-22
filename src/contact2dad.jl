@@ -46,15 +46,27 @@ function FEMBase.add_elements!(::Problem{Contact2DAD}, ::Any)
           "elements to the Mortar2D problem.")
 end
 
-function FEMBase.add_slave_elements!(problem::Problem{Contact2DAD}, elements)
+function FEMBase.add_slave_elements!(problem::Problem{Contact2DAD}, elements...)
     for element in elements
         push!(problem.elements, element)
     end
 end
 
-function FEMBase.add_master_elements!(problem::Problem{Contact2DAD}, elements)
+function FEMBase.add_master_elements!(problem::Problem{Contact2DAD}, elements...)
     for element in elements
         push!(problem.properties.master_elements, element)
+    end
+end
+
+function FEMBase.add_slave_elements!(problem::Problem{Contact2DAD}, element_sets::Union{Vector, Tuple}...)
+    for element_set in element_sets
+        add_slave_elements!(problem, element_set...)
+    end
+end
+
+function FEMBase.add_master_elements!(problem::Problem{Contact2DAD}, element_sets::Union{Vector, Tuple}...)
+    for element_set in element_sets
+        add_master_elements!(problem, element_set...)
     end
 end
 

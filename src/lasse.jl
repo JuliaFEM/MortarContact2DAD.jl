@@ -172,9 +172,16 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
                     la_s = interpolate(Phi, la1) # traction force in gauss point
                     gn = -dot(n_s, x_s - x_m) # normal gap
 
-                    fc[:,slave_element_nodes] += w*la_s*N1'
-                    fc[:,master_element_nodes] -= w*la_s*N2'
-                    gap[1,slave_element_nodes] += w*gn*Phi
+                    for (i,j) in enumerate(slave_element_nodes)
+                        fc[:,j] += w*la_s*N1[i]
+                    end
+                    for (i,j) in enumerate(master_element_nodes)
+                        fc[:,j] -= w*la_s*N2[i]
+                    end
+                    for (i,j) in enumerate(slave_element_nodes)
+                        gap[1,j] += w*gn*Phi[i]
+                    end
+                    # gap[1,slave_element_nodes] += w*gn*Phi
                     #gap[1,slave_element_nodes] += w*gn*N1'
 
                 end # done integrating segment

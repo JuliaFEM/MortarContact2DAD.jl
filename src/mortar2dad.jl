@@ -14,13 +14,13 @@ function FEMBase.add_elements!(::Problem{Mortar2DAD}, ::Any)
           "elements to the Mortar2D problem.")
 end
 
-function FEMBase.add_slave_elements!(problem::Problem{Mortar2DAD}, elements)
+function FEMBase.add_slave_elements!(problem::Problem{Mortar2DAD}, elements...)
     for element in elements
         push!(problem.elements, element)
     end
 end
 
-function FEMBase.add_master_elements!(problem::Problem{Mortar2DAD}, elements)
+function FEMBase.add_master_elements!(problem::Problem{Mortar2DAD}, elements...)
     for element in elements
         push!(problem.properties.master_elements, element)
     end

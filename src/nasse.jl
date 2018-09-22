@@ -55,11 +55,11 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
             u = Dict{Int64, Vector{T}}()
             la = Dict{Int64, Vector{T}}()
             for j in S
-                u[j] = [x[2*(nodemap[j]-1)+1] for i=1:2]
-                la[j] = [x[2*(nodemap[j]-1)+1+n_dofs] for i=1:2]
+                u[j] = [x[2*(nodemap[j]-1)+i] for i=1:2]
+                la[j] = [x[2*(nodemap[j]-1)+i+n_dofs] for i=1:2]
             end
             for j in M
-                u[j] = [x[2*(nodemap[j]-1)+1] for i=1:2]
+                u[j] = [x[2*(nodemap[j]-1)+i] for i=1:2]
             end
             x = Dict(j => X[j]+u[j] for j in keys(u))
 
@@ -203,8 +203,6 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
                             gn[j] += w*dot(n_s, x_m-x_s)*Phi[i]
                         end
 
-                        #gap[1,slave_element_nodes] += w*gn*N1'
-
                     end # done integrating segment
 
                 end # master elements done
@@ -226,7 +224,7 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
                     continue
                 end
                 complementarity_condition[j] = value(lan[j] - gn[j])
-                is_active[j] = complementarity_condition[j] > 0
+                is_active[j] = complementarity_condition[j] >= 0
             end
 
             if problem.properties.iteration == 1
@@ -275,8 +273,8 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
                 dofs = dof1, dof2 = [2*(nodemap[j]-1)+n_dofs+i for i=1:2]
                 @debug("write contact constraint cn($j) to dofs $dofs")
                 if is_active[j]
-                    y[dof1] -= gn[node_id]
-                    y[dof2] += lat[node_id]
+                    y[dof1] = -gn[node_id]
+                    y[dof2] = lat[node_id]
                 else
                     y[dofs] = la[node_id]
                 end
@@ -295,16 +293,16 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
             # end
 
             # Apply scaling to contact virtual work and contact constraints
-            if problem.properties.use_scaling
-                scaling = empty!(problem.properties.scaling_factors)
-                for j in S
-                    isapprox(beta[j], 0.0) && continue
-                    scaling[j] = alpha[j] / (nadj_nodes[j] * beta[j])
-                    C[1,j] *= scaling[j]
-                    fc[:,j] *= scaling[j]
-                end
-                update!(slave_elements, "contact scaling", time => scaling)
-            end
+            # if problem.properties.use_scaling
+            #     scaling = empty!(problem.properties.scaling_factors)
+            #     for j in S
+            #         isapprox(beta[j], 0.0) && continue
+            #         scaling[j] = alpha[j] / (nadj_nodes[j] * beta[j])
+            #         C[1,j] *= scaling[j]
+            #         fc[:,j] *= scaling[j]
+            #     end
+            #     update!(slave_elements, "contact scaling", time => scaling)
+            # end
 
             n_evaluations += 1
 
@@ -316,8 +314,12 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
 
     end # nasse_factory
 
+    S = get_slave_nodes(problem)
+    n_slave_nodes = length(S)
+    @debug("Contact interface has $n_slave_nodes nodes")
 
-    for j in get_slave_nodes(problem)
+    for j in sort(collect(S))
+        @debug("Finding solution for node $j")
         F!, slave_dofs, master_dofs = nasse_factory(j)
         u = problem.assembly.u
         la = problem.assembly.la
@@ -362,7 +364,8 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
             @debug("Emptying dofs $dofs from C2")
             C2[dofs, :] .= 0.0
             @debug("Emptying dofs $dofs from D")
-            D[dofs, dofs] .= 0.0
+            D[dofs, :] .= 0.0
+            D[:, dofs] .= 0.0
             @debug("Emptying dofs $dofs from f")
             f[dofs] .= 0.0
             @debug("Emptying dofs $dofs from g")
@@ -370,14 +373,24 @@ function assemble_interface_2!(problem::Problem{Contact2DAD}, assembly::Assembly
             return nothing
         end
 
+        kill_dofs!(3:length(slave_dofs))
+
+        droptol = true
+        if droptol
+            K[abs.(K) .< 1.0e-9] .= 0.0
+            C1[abs.(C1) .< 1.0e-9] .= 0.0
+            C2[abs.(C2) .< 1.0e-9] .= 0.0
+            D[abs.(D) .< 1.0e-9] .= 0.0
+            f[abs.(f) .< 1.0e-9] .= 0.0
+            g[abs.(g) .< 1.0e-9] .= 0.0
+        end
+
         @info("Contact stiffnes K = ∂fc/∂u", K)
-        @info("Discrete interface operator B = ∂fc/∂λ = [0 D -M]'", C1)
+        @info("Discrete interface operator B' = ∂fc/∂λ = [0 D -M]'", C1')
         @info("Contact constraints", C2)
         @info("Tangential constraints", D)
         @info("Contact force fc", f)
         @info("Gap vector gn", g)
-
-        kill_dofs!(3:length(slave_dofs))
 
         @info("Assembling to K")
         add!(assembly.K, all_dofs, all_dofs, K)
