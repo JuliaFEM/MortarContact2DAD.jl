@@ -208,12 +208,14 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
             end
         end
 
-        is_active = Dict{Int, Bool}()
-        condition = Dict()
+        is_active = Dict{Int64, Bool}()
+        condition = Dict{Int64, Float64}()
 
         for j in S
             if j in props.always_in_contact
+                @info("Set node $j to be always in contact.")
                 is_active[j] = true
+                condition[j] = 1.0
                 continue
             end
             lan = dot(normals[j], la[j])
@@ -224,14 +226,14 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
         if problem.properties.iteration == 1 && state == :ACTIVE
             for j in S
                 is_active[j] = true
-                condition[j] = 0.0
+                condition[j] = 1.0
             end
         end
 
         if problem.properties.iteration == 1 && state == :INACTIVE
             for j in S
                 is_active[j] = false
-                condition[j] = 0.0
+                condition[j] = -1.0
             end
         end
 
