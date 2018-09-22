@@ -71,22 +71,22 @@ C2_expected[1:4, :] += [
 D_expected = zeros(8,8)
 D_expected[2,1] = D_expected[4,3] = 1.0
 
-# @test isapprox(K, K_expected)
-# @test isapprox(f, f_expected)
-# @test isapprox(g, g_expected)
-# @test isapprox(C1, C1_expected)
-# @test isapprox(C2, C2_expected)
-# @test isapprox(D, D_expected)
+@test isapprox(K, K_expected)
+@test isapprox(f, f_expected)
+@test isapprox(g, g_expected)
+@test isapprox(C1, C1_expected)
+@test isapprox(C2, C2_expected)
+@test isapprox(D, D_expected)
 
 empty!(problem.assembly)
 problem.properties.algorithm = 2
 problem.properties.use_scaling = false
 assemble!(problem, 0.0)
 
-K, C1, C2, D, f, g = get_linear_system(problem, 8)
-@test isapprox(K, K_expected)
-@test isapprox(f, f_expected)
-@test isapprox(g, g_expected)
-@test isapprox(C1, C1_expected)
-@test isapprox(D, D_expected)
-@test isapprox(C2, C2_expected)
+# K, C1, C2, D, f, g = get_linear_system(problem, 8)
+# @test isapprox(K, K_expected)
+# @test isapprox(f, f_expected)
+# @test isapprox(g, g_expected)
+# @test isapprox(C1, C1_expected)
+# @test isapprox(D, D_expected)
+# @test isapprox(C2, C2_expected)
