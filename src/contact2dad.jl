@@ -255,6 +255,8 @@ function FEMBase.assemble_elements!(problem::Problem{Contact2DAD}, assembly::Ass
         assemble_interface_1!(problem, assembly, elements, time)
     elseif n == 2
         assemble_interface_2!(problem, assembly, elements, time)
+    elseif n == 3
+        assemble_interface_3!(problem, assembly, elements, time)
     end
     return nothing
 end

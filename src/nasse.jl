@@ -31,7 +31,7 @@ function nodal_assembly_factory(node_id, problem, time)
     nodemap = Dict(j => i for (i, j) in enumerate(union(slave_nodes, master_nodes)))
     @info("nodes mapping inside algorithm: $nodemap")
 
-    function F!(y::AbstractArray, x::Vector{T}) where {T}
+    function F!(y::Vector{T}, x::Vector{T}) where {T}
 
         # unpack input data to dictionaries for easier usage
         # the order is: first slave nodes (with node_id first)

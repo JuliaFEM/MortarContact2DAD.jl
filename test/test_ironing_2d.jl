@@ -19,7 +19,7 @@ mesh.nodes = Dict(renumber[i] => j for (i,j) in mesh.nodes)
 mesh.elements = Dict(i => [renumber[c] for c in j] for (i,j) in mesh.elements)
 mesh.node_sets = Dict(n => Set(renumber[j] for j in v) for (n,v) in mesh.node_sets)
 contact = Problem(Contact2DAD, "interface", 2, "displacement")
-contact.properties.algorithm = 2
+contact.properties.algorithm = 1
 contact_slave_elements = create_elements(mesh, "TOOL_TO_BLOCK")
 contact_master_elements = create_elements(mesh, "BLOCK_TO_TOOL")
 add_slave_elements!(contact, contact_slave_elements)

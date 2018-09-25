@@ -1,7 +1,51 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-quadrature_points = FEMBase.get_quadrature_points(Val{:GLSEG5})
+const quadrature_points = FEMBase.get_quadrature_points(Val{:GLSEG5})
+
+function calculate_dual_basis_coefficients!(Ae::Matrix{T}, problem, slave_element, x, n) where {T}
+
+    cs1, cs2 = get_connectivity(slave_element)
+
+    De = zeros(T, 2, 2)
+    Me = zeros(T, 2, 2)
+
+    nsegments = 0
+
+    for master_element in get_master_elements(problem, slave_element)
+
+        cm1, cm2 = get_connectivity(master_element)
+
+        # calculate segmentation: we care only about endpoints
+        xi1a = project_from_master_to_slave(Val{:Seg2}, x[cm1], x[cs1], x[cs2], n[cs1], n[cs2])
+        xi1b = project_from_master_to_slave(Val{:Seg2}, x[cm2], x[cs1], x[cs2], n[cs1], n[cs2])
+        xi1a = clamp(xi1a, -1.0, 1.0)
+        xi1b = clamp(xi1b, -1.0, 1.0)
+        l = 1/2*abs(xi1b-xi1a)
+        isapprox(l, 0.0) && continue # no contribution in this master element
+
+        nsegments += 1
+        for (weight, xi) in quadrature_points
+            detj = norm(0.5*(x[cs2]-x[cs1]))
+            w = weight*detj*l
+            xi_s = 0.5*(1.0-xi)*xi1a + 0.5*(1.0+xi)*xi1b
+            N1 = [0.5*(1.0-xi_s), 0.5*(1.0+xi_s)]
+            De += w*Matrix(Diagonal(N1))
+            Me += w*kron(N1, N1')
+        end
+    end
+
+    if nsegments == 0
+        Ae[:,:] .= Matrix(1.0I, 3, 3)
+        return nothing
+    else
+        a, b, c, d = Me
+        invMe = 1.0/(a*d-b*c) * [d -c; -b a]
+        Ae[:,:] .= De*invMe
+        return nothing
+    end
+
+end
 
 function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly,
                                elements::Vector{Element{Seg2}}, time::Float64)
@@ -14,26 +58,27 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
 
     n_evaluations = 0
 
-    function calculate_interface(x::Vector{T}) where {T}
+    function F!(y::Vector{T}, x::Vector{T}) where {T}
 
         slave_elements = get_slave_elements(problem)
         X = problem("geometry", time)
         S = get_slave_nodes(problem)
         M = get_master_nodes(problem)
 
-        ndofs = Int(length(x)/2)
-        nnodes = Int(ndofs/2)
         u = Dict(j => [x[2*(j-1)+i] for i=1:2] for j in union(S, M))
         la = Dict(j => [x[2*(j-1)+i+ndofs] for i=1:2] for j in S)
         x = Dict(j => X[j]+u[j] for j in union(S, M))
 
-        f = zeros(T, 2, nnodes)
-        g = zeros(T, 2, nnodes)
-        gn = Dict(j => zero(T) for j in S)
-
-        # 1. update nodal normals for slave elements
+        f = Dict(j => zeros(T, 2) for j in union(S, M))
+        g = Dict(j => zeros(T, 2) for j in S)
         n = Dict(j => zeros(T, 2) for j in S)
         t = Dict(j => zeros(T, 2) for j in S)
+
+        gn = Dict(j => zero(T) for j in S)
+        lan = Dict(j => zero(T) for j in S)
+        lat = Dict(j => zero(T) for j in S)
+
+        # 1. update nodal normals for slave elements
         coeff = props.rotate_normals ? -1.0 : 1.0
         for element in slave_elements
             a, b = conn = get_connectivity(element)
@@ -50,68 +95,16 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
             t[j] /= norm(t[j])
         end
 
-        alpha = empty!(problem.properties.alpha)
-        beta = empty!(problem.properties.beta)
-        nadj_nodes = empty!(problem.properties.nadj_nodes)
-
         # 2. loop all slave elements
         for slave_element in slave_elements
 
             cs1, cs2 = get_connectivity(slave_element)
 
+            Ae = zeros(T, 2, 2)
             if problem.properties.dual_basis # construct dual basis
-
-                De = zeros(T, 2, 2)
-                Me = zeros(T, 2, 2)
-                ae = zeros(T, 2)
-                be = zeros(T, 2)
-
-                for (weight, xi) in quadrature_points
-                    detj = norm(0.5*(x[cs2]-x[cs1]))
-                    w = weight*detj
-                    N1 = [0.5*(1.0-xi), 0.5*(1.0+xi)]
-                    ae += w*vec(N1)/detj
-                end
-
-                nsegments = 0
-
-                for master_element in get_master_elements(problem, slave_element)
-
-                    cm1, cm2 = get_connectivity(master_element)
-
-                    # calculate segmentation: we care only about endpoints
-                    xi1a = project_from_master_to_slave(Val{:Seg2}, x[cm1], x[cs1], x[cs2], n[cs1], n[cs2])
-                    xi1b = project_from_master_to_slave(Val{:Seg2}, x[cm2], x[cs1], x[cs2], n[cs1], n[cs2])
-                    xi1a = clamp(xi1a, -1.0, 1.0)
-                    xi1b = clamp(xi1b, -1.0, 1.0)
-                    l = 1/2*abs(xi1b-xi1a)
-                    isapprox(l, 0.0) && continue # no contribution in this master element
-
-                    nsegments += 1
-                    for (weight, xi) in quadrature_points
-                        detj = norm(0.5*(x[cs2]-x[cs1]))
-                        w = weight*detj*l
-                        xi_s = 0.5*(1.0-xi)*xi1a + 0.5*(1.0+xi)*xi1b
-                        N1 = [0.5*(1.0-xi_s), 0.5*(1.0+xi_s)]
-                        De += w*Matrix(Diagonal(N1))
-                        Me += w*kron(N1, N1')
-                        be += w*N1/detj
-                    end
-                end
-
-                for (i, j) in enumerate(get_connectivity(slave_element))
-                    alpha[j] = get(alpha, j, 0.0) + ae[i]
-                    beta[j] = get(beta, j, 0.0) + be[i]
-                    nadj_nodes[j] = get(nadj_nodes, j, 0) + 1
-                end
-
-                if nsegments == 0
-                    continue
-                end
-
-                Ae = De*inv(Me)
+                calculate_dual_basis_coefficients!(Ae, problem, slave_element, x, n)
             else
-                Ae = Matrix(1.0I, 2, 2)
+                Ae[:,:] .= Matrix(1.0I, 2, 2)
             end
 
             # 3. loop all master elements
@@ -136,32 +129,34 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
                     # project gauss point from slave element to master element
                     xi_s = 0.5*(1.0-xi)*xi1a + 0.5*(1.0+xi)*xi1b
                     N1 = (0.5*(1.0-xi_s), 0.5*(1.0+xi_s))
-                    x1 = (x[cs1], x[cs2])
-                    n1 = (n[cs1], n[cs2])
-                    t1 = (t[cs1], t[cs2])
-                    la1 = (la[cs1], la[cs2])
-                    x_s = interpolate(N1, x1) # coordinate in gauss point
-                    n_s = interpolate(N1, n1) # normal direction in gauss point
-                    t_s = interpolate(N1, t1) # tangent direction in gauss point
+                    x_s = interpolate(N1, (x[cs1], x[cs2])) # coordinate in gauss point
+                    n_s = interpolate(N1, (n[cs1], n[cs2])) # normal direction in gauss point
+                    t_s = interpolate(N1, (t[cs1], t[cs2])) # tangent direction in gauss point
+                    normalize = true
+                    if normalize
+                        n_s ./= norm(n_s)
+                        t_s ./= norm(t_s)
+                    end
                     Phi = Ae*collect(N1)
-                    la_s = interpolate(Phi, la1) # traction force in gauss point
+                    la_s = interpolate(Phi, (la[cs1], la[cs2])) # traction force in gauss point
 
                     xi_m = project_from_slave_to_master(Val{:Seg2}, x_s, n_s, x[cm1], x[cm2])
                     N2 = (0.5*(1.0-xi_m), 0.5*(1.0+xi_m))
-                    x2 = (x[cm1], x[cm2])
-                    x_m = interpolate(N2, x2)
+                    x_m = interpolate(N2, (x[cm1], x[cm2]))
 
                     slave_element_nodes = get_connectivity(slave_element)
                     master_element_nodes = get_connectivity(master_element)
                     for (i,j) in enumerate(slave_element_nodes)
-                        f[:,j] += w*la_s*N1[i]
+                        f[j] += w*la_s*N1[i]
                     end
                     for (i,j) in enumerate(master_element_nodes)
-                        f[:,j] -= w*la_s*N2[i]
+                        f[j] -= w*la_s*N2[i]
                     end
                     for (i,j) in enumerate(slave_element_nodes)
-                        g[:,j] += w*(x_m-x_s)*Phi[i]
+                        g[j] += w*(x_m-x_s)*Phi[i]
                         gn[j] += w*dot(n_s, x_m-x_s)*Phi[i]
+                        lan[j] += w*dot(n_s, la_s)*Phi[i]
+                        lat[j] += w*dot(n_s, la_s)*Phi[i]
                     end
 
                 end # done integrating segment
@@ -175,8 +170,8 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
 
         is_active = Dict{Int64, Bool}()
         complementarity_condition = Dict{Int64, Float64}()
-        lan = Dict(j => dot(n[j], la[j]) for j in S)
-        lat = Dict(j => dot(t[j], la[j]) for j in S)
+        # lan = Dict(j => dot(n[j], la[j]) for j in S)
+        # lat = Dict(j => dot(t[j], la[j]) for j in S)
         # gn = Dict(j => dot(n[j], g[:,j]) for j in S)
 
         state = problem.properties.contact_state_in_first_iteration
@@ -205,17 +200,15 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
             is_active[j] = complementarity_condition[j] > 0
         end
 
-        if problem.properties.iteration == 1 && state == :ACTIVE
+        if problem.properties.iteration == 1
             for j in S
-                is_active[j] = true
-                complementarity_condition[j] = 1.0
-            end
-        end
-
-        if problem.properties.iteration == 1 && state == :INACTIVE
-            for j in S
-                is_active[j] = false
-                complementarity_condition[j] = -1.0
+                if state == :ACTIVE
+                    is_active[j] = true
+                    complementarity_condition[j] = 1.0
+                elseif state == :INACTIVE
+                    is_active[j] = false
+                    complementarity_condition[j] = -1.0
+                end
             end
         end
 
@@ -240,34 +233,79 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
             end
         end
 
-        C = zeros(T, 2, nnodes)
+        if problem.properties.use_scaling
 
-        for j in S
+            # Apply scaling to contact virtual work and contact constraints
 
-            if is_active[j]
-                C[1,j] = -gn[j]
-                C[2,j] = lat[j]
-            else
-                C[:,j] = la[j]
+            alpha = Dict(j => zero(T) for j in S)
+            beta = Dict(j => zero(T) for j in S)
+            scaling = Dict(j => zero(T) for j in S)
+            nadj_nodes = Dict(j => zero(Int64) for j in S)
+
+            for slave_element in slave_elements
+                cs1, cs2 = get_connectivity(slave_element)
+                ae = zeros(T, 2)
+                be = zeros(T, 2)
+                for (weight, xi) in quadrature_points
+                    detj = norm(0.5*(x[cs2]-x[cs1]))
+                    w = weight*detj
+                    N1 = [0.5*(1.0-xi), 0.5*(1.0+xi)]
+                    ae += w*vec(N1)/detj
+                end
+                for master_element in get_master_elements(problem, slave_element)
+                    cm1, cm2 = get_connectivity(master_element)
+                    xi1a = project_from_master_to_slave(Val{:Seg2}, x[cm1], x[cs1], x[cs2], n[cs1], n[cs2])
+                    xi1b = project_from_master_to_slave(Val{:Seg2}, x[cm2], x[cs1], x[cs2], n[cs1], n[cs2])
+                    xi1a = clamp(xi1a, -1.0, 1.0)
+                    xi1b = clamp(xi1b, -1.0, 1.0)
+                    l = 1/2*abs(xi1b-xi1a)
+                    isapprox(l, 0.0) && continue
+                    for (weight, xi) in quadrature_points
+                        detj = norm(0.5*(x[cs2]-x[cs1]))
+                        w = weight*detj*l
+                        N1 = [0.5*(1.0-xi), 0.5*(1.0+xi)]
+                        be += w*N1/detj
+                    end
+                end
+                for (i, j) in enumerate(get_connectivity(slave_element))
+                    alpha[j] += ae[i]
+                    beta[j] += be[i]
+                    nadj_nodes[j] += 1
+                end
             end
 
-        end
-
-        # Apply scaling to contact virtual work and contact constraints
-        if problem.properties.use_scaling
-            scaling = empty!(problem.properties.scaling_factors)
             for j in S
                 isapprox(beta[j], 0.0) && continue
                 scaling[j] = alpha[j] / (nadj_nodes[j] * beta[j])
-                C[1,j] *= scaling[j]
-                f[:,j] *= scaling[j]
+                gn[j] *= scaling[j]
+                f[j] *= scaling[j]
             end
+
             update!(slave_elements, "contact scaling", time => scaling)
+
+        end
+
+        # Contact force
+        for j in union(S, M)
+            dofs = [2*(j-1)+i for i=1:2]
+            y[dofs] .= f[j]
+        end
+
+        # Contact constraints
+        for j in S
+            offset = 2*(length(S)+length(M))
+            dofs = dof1, dof2 = [2*(j-1)+offset+i for i=1:2]
+            if is_active[j]
+                y[dof1] = -gn[j]
+                y[dof2] = lat[j]
+            else
+                y[dofs] = la[j]
+            end
         end
 
         n_evaluations += 1
 
-        return vec([f C])
+        return nothing
 
     end
 
@@ -290,12 +328,13 @@ function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly
     end
 
     x = [problem.assembly.u[1:ndofs]; problem.assembly.la[1:ndofs]]
+    y = zeros(length(x))
     chunk_size = length(x)
     @info("ndofs = $ndofs, chunk size = $chunk_size")
     chunk = ForwardDiff.Chunk{chunk_size}()
-    cfg = ForwardDiff.JacobianConfig(calculate_interface, x, chunk)
-    result = DiffResults.JacobianResult(x)
-    ForwardDiff.jacobian!(result, calculate_interface, x, cfg)
+    cfg = ForwardDiff.JacobianConfig(F!, y, x, chunk)
+    result = DiffResults.JacobianResult(y, x)
+    ForwardDiff.jacobian!(result, F!, y, x, cfg)
     A = sparse(DiffResults.jacobian(result))
     b = -sparse(DiffResults.value(result))
     SparseArrays.droptol!(A, 1.0e-9)
