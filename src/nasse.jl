@@ -1,8 +1,6 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-quadrature_points = FEMBase.get_quadrature_points(Val{:GLSEG5})
-
 function nodal_assembly_factory(node_id, problem, time)
 
     X = problem("geometry", time)
@@ -71,62 +69,12 @@ function nodal_assembly_factory(node_id, problem, time)
 
             cs1, cs2 = get_connectivity(slave_element)
 
+            Ae = zeros(T, 2, 2)
             if problem.properties.dual_basis # construct dual basis
-
-                De = zeros(T, 2, 2)
-                Me = zeros(T, 2, 2)
-                ae = zeros(T, 2)
-                be = zeros(T, 2)
-
-                for (weight, xi) in quadrature_points
-                    detj = norm(0.5*(x[cs2]-x[cs1]))
-                    w = weight*detj
-                    N1 = [0.5*(1.0-xi), 0.5*(1.0+xi)]
-                    ae += w*N1/detj
-                end
-
-                nsegments = 0
-
-                for master_element in master_elements
-
-                    cm1, cm2 = get_connectivity(master_element)
-
-                    # calculate segmentation
-                    xi1a = project_from_master_to_slave(Val{:Seg2}, x[cm1], x[cs1], x[cs2], n[cs1], n[cs2])
-                    xi1b = project_from_master_to_slave(Val{:Seg2}, x[cm2], x[cs1], x[cs2], n[cs1], n[cs2])
-                    xi1a = clamp(xi1a, -1.0, 1.0)
-                    xi1b = clamp(xi1b, -1.0, 1.0)
-                    l = 1/2*abs(xi1b-xi1a)
-                    isapprox(l, 0.0) && continue # no contribution in this master element
-
-                    nsegments += 1
-                    for (weight, xi) in quadrature_points
-                        detj = norm(0.5*(x[cs2]-x[cs1]))
-                        w = weight*detj*l
-                        xi_s = 0.5*(1.0-xi)*xi1a + 0.5*(1.0+xi)*xi1b
-                        N1 = [0.5*(1.0-xi_s), 0.5*(1.0+xi_s)]
-                        De += w*Matrix(Diagonal(N1))
-                        Me += w*kron(N1', N1)
-                        be += w*N1/detj
-                    end
-                end
-
-                for (i, j) in enumerate(get_connectivity(slave_element))
-                    alpha[j] = get(alpha, j, 0.0) + ae[i]
-                    beta[j] = get(beta, j, 0.0) + be[i]
-                    nadj_nodes[j] = get(nadj_nodes, j, 0) + 1
-                end
-
-                if nsegments == 0
-                    continue
-                end
-
-                Ae = De*inv(Me)
+                calculate_dual_basis_coefficients!(Ae, problem, slave_element, x, n)
             else
-                Ae = Matrix(1.0I, 2, 2)
+                Ae[:,:] .= Matrix(1.0I, 2, 2)
             end
-
-            # Dual basis constructed, create interface
 
             for master_element in master_elements
 

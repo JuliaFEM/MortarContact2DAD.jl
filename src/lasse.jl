@@ -1,52 +1,6 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/MortarContact2DAD.jl/blob/master/LICENSE
 
-const quadrature_points = FEMBase.get_quadrature_points(Val{:GLSEG5})
-
-function calculate_dual_basis_coefficients!(Ae::Matrix{T}, problem, slave_element, x, n) where {T}
-
-    cs1, cs2 = get_connectivity(slave_element)
-
-    De = zeros(T, 2, 2)
-    Me = zeros(T, 2, 2)
-
-    nsegments = 0
-
-    for master_element in get_master_elements(problem, slave_element)
-
-        cm1, cm2 = get_connectivity(master_element)
-
-        # calculate segmentation: we care only about endpoints
-        xi1a = project_from_master_to_slave(Val{:Seg2}, x[cm1], x[cs1], x[cs2], n[cs1], n[cs2])
-        xi1b = project_from_master_to_slave(Val{:Seg2}, x[cm2], x[cs1], x[cs2], n[cs1], n[cs2])
-        xi1a = clamp(xi1a, -1.0, 1.0)
-        xi1b = clamp(xi1b, -1.0, 1.0)
-        l = 1/2*abs(xi1b-xi1a)
-        isapprox(l, 0.0) && continue # no contribution in this master element
-
-        nsegments += 1
-        for (weight, xi) in quadrature_points
-            detj = norm(0.5*(x[cs2]-x[cs1]))
-            w = weight*detj*l
-            xi_s = 0.5*(1.0-xi)*xi1a + 0.5*(1.0+xi)*xi1b
-            N1 = [0.5*(1.0-xi_s), 0.5*(1.0+xi_s)]
-            De += w*Matrix(Diagonal(N1))
-            Me += w*kron(N1, N1')
-        end
-    end
-
-    if nsegments == 0
-        Ae[:,:] .= Matrix(1.0I, 3, 3)
-        return nothing
-    else
-        a, b, c, d = Me
-        invMe = 1.0/(a*d-b*c) * [d -c; -b a]
-        Ae[:,:] .= De*invMe
-        return nothing
-    end
-
-end
-
 function assemble_interface_1!(problem::Problem{Contact2DAD}, assembly::Assembly,
                                elements::Vector{Element{Seg2}}, time::Float64)
 
