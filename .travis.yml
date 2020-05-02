@@ -4,13 +4,18 @@ os:
     - linux
 
 julia:
-    - 0.7
     - 1.0
-    - nightly
+    - 1.4
 
-matrix:
-    allow_failures:
-        - julia: nightly
+jobs:
+    include:
+        - stage: "Documentation"
+          os: linux
+          script:
+            - julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+            - julia --project=docs/ docs/make.jl
+          after_success:
+            - julia --project=docs/ docs/deploy.jl
 
 after_success:
-    - julia -e 'cd(Pkg.dir("MortarContact2DAD")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
+    - julia -e 'Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
